@@ -1,0 +1,51 @@
+# ------------------------------
+# macOS
+# ------------------------------
+.DS_Store
+
+# ------------------------------
+# Python cache
+# ------------------------------
+__pycache__/
+*.py[cod]
+
+# ------------------------------
+# Large root asset folders
+# ------------------------------
+(outdated) logos_upscaled/
+snap cards/
+output_psd/
+Logos/
+
+# ------------------------------
+# Saved webpages / browser dumps
+# ------------------------------
+*_files/
+*.html
+
+# ------------------------------
+# Loose exports
+# ------------------------------
+CustomCard*.png
+logo_scan*.csv
+
+# ------------------------------
+# Large assets inside photopea_batch
+# ------------------------------
+photopea_batch/logos_raw/
+photopea_batch/logos_cleaned/
+photopea_batch/output_psd/
+photopea_batch/*.7z
+
+# ------------------------------
+# R project user files
+# ------------------------------
+photopea_batch/.Rhistory
+photopea_batch/.Rproj.user/
+
+# ------------------------------
+# Python environments
+# ------------------------------
+.venv/
+env/
+venv/
