@@ -15,7 +15,7 @@ __pycache__/
 (outdated) logos_upscaled/
 snap cards/
 output_psd/
-Logos/
+/Logos/
 
 # ------------------------------
 # Saved webpages / browser dumps
@@ -49,3 +49,8 @@ photopea_batch/.Rproj.user/
 .venv/
 env/
 venv/
+
+!sample_assets/
+!sample_assets/logos/
+!sample_assets/logos/**
+sample_assets/logos/cropped/
