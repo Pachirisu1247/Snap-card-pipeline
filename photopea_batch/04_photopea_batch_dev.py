@@ -8,20 +8,29 @@ from PIL import Image  # for auto-cropping logos
 PORT = 5000
 CARDS_CSV = "snap_cards.msz_latest.csv"
 TEMPLATE_PSD = "AgathaNew.psd"
-OUTPUT_DIR = "output_psd"
-BATCH_LIMIT = None   # e.g., 5 to test on first 5 cards, or None for all
+OUTPUT_DIR = "output_psd_dev"
+BATCH_LIMIT = 1   # start with 1 for the first test run
 
-# Logos on disk (raw and cropped)
-LOGO_DIR_RAW = r"C:\Users\allda\OneDrive - University of Southern California\Marvel Snap Cards\photopea_batch\logos_cleaned"
+SAMPLE_IDS_FILE = "sample_ids.txt"
+
+# Logos on disk (repo-local dev sandbox)
+LOGO_DIR_RAW = os.path.join("sample_assets", "logos")
 LOGO_EXT = ".png"  # logo files are PNG
 CROPPED_SUBDIR = "cropped"
-LOGO_DIR = os.path.join(LOGO_DIR_RAW, CROPPED_SUBDIR)  # we will serve from here
 
 # ---------- SETUP ----------
 app = Flask(__name__)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-os.makedirs(os.path.join(BASE_DIR, OUTPUT_DIR), exist_ok=True)
 
+LOGO_DIR_RAW = os.path.join(BASE_DIR, LOGO_DIR_RAW)
+LOGO_DIR = os.path.join(LOGO_DIR_RAW, CROPPED_SUBDIR)
+
+OUTPUT_DIR_ABS = os.path.join(BASE_DIR, OUTPUT_DIR)
+os.makedirs(OUTPUT_DIR_ABS, exist_ok=True)
+os.makedirs(LOGO_DIR, exist_ok=True)
+
+if "output_psd_dev" not in OUTPUT_DIR_ABS.replace("\\", "/"):
+    raise RuntimeError(f"Refusing to run: output dir is not the dev folder: {OUTPUT_DIR_ABS}")
 def ensure_cropped_logos():
     """
     Auto-crop transparency from all logo PNGs in LOGO_DIR_RAW
@@ -116,19 +125,60 @@ def ensure_cropped_logos():
             except Exception:
                 pass
 
+def load_sample_ids(path: str):
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"Missing sample id file: {path}")
+
+    ids = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            ids.append(line)
+
+    if not ids:
+        raise ValueError("sample_ids.txt exists but contains no usable IDs.")
+
+    return ids
+
+print(f"Using repo-local sample logos from: {LOGO_DIR_RAW}")
+print(f"Cropped logos will be served from: {LOGO_DIR}")
+print(f"PSD output will be written to: {OUTPUT_DIR_ABS}")
 
 # run cropping once at startup
 ensure_cropped_logos()
 
 # load card data
 cards_df = pd.read_csv(os.path.join(BASE_DIR, CARDS_CSV))
-# --- FIX: replace NaN with empty strings so JSON is valid ---
 cards_df = cards_df.where(pd.notna(cards_df), "")
+
+sample_ids_path = os.path.join(BASE_DIR, SAMPLE_IDS_FILE)
+sample_ids = load_sample_ids(sample_ids_path)
+sample_ids_set = set(sample_ids)
+
+cards_df = cards_df[cards_df["id"].astype(str).isin(sample_ids_set)].copy()
+
+# preserve the order from sample_ids.txt
+cards_df["__sample_order"] = pd.Categorical(
+    cards_df["id"],
+    categories=sample_ids,
+    ordered=True
+)
+cards_df = cards_df.sort_values("__sample_order").drop(columns="__sample_order")
+
+loaded_ids = set(cards_df["id"].astype(str))
+missing_ids = [x for x in sample_ids if x not in loaded_ids]
+if missing_ids:
+    print("WARNING: these sample IDs were not found in the CSV:")
+    for x in missing_ids:
+        print("  -", x)
+
 cards = cards_df.to_dict(orient="records")
 if BATCH_LIMIT is not None:
     cards = cards[:BATCH_LIMIT]
 
-
+print(f"Loaded {len(cards)} sample cards from {CARDS_CSV}")
 def id_to_logo_filename(card_id: str) -> str:
     """
     Convert a card id like 'absorbing-man' to a logo filename like
@@ -160,7 +210,7 @@ INDEX_HTML = r"""
   <h1>Marvel Snap → Photopea Batch Generator</h1>
   <p class="small">
     Steps: (1) Click <b>Open Photopea</b> (wait until it loads). (2) Click <b>Start batch</b>.
-    Output PSDs will appear in the <code>output_psd</code> folder next to the Python script.
+    Output PSDs will appear in the <code>output_psd_dev</code> folder next to the Python script.
   </p>
   <button id="btnOpen" onclick="document.getElementById('pp').src='https://www.photopea.com';">Open Photopea</button>
   <button id="btnStart">Start batch</button>
@@ -632,7 +682,7 @@ def template_psd():
 def save():
     filename = request.args.get("filename", "output.psd")
     safe = re.sub(r"[^A-Za-z0-9_.-]", "_", filename)
-    out_path = os.path.join(BASE_DIR, OUTPUT_DIR, safe)
+    out_path = os.path.join(OUTPUT_DIR_ABS, safe)
     with open(out_path, "wb") as f:
         f.write(request.data)
     return "OK"
