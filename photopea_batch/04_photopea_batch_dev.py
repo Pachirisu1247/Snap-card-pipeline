@@ -9,7 +9,7 @@ PORT = 5000
 CARDS_CSV = "snap_cards.msz_latest.csv"
 TEMPLATE_PSD = "AgathaNew.psd"
 OUTPUT_DIR = "output_psd_dev"
-BATCH_LIMIT = 5   # start with 1 for the first test run
+BATCH_LIMIT = 8   # start with 1 for the first test run
 
 SAMPLE_IDS_FILE = "sample_ids.txt"
 

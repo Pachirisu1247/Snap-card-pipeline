@@ -4,7 +4,29 @@ import re
 import html
 
 API_URL = "https://marvelsnapzone.com/getinfo/?searchtype=cards&searchcardstype=true"
-OUTPUT_CSV = "snap_cards.msz_latest.csv"  # <-- NEW FILE, does NOT touch your original
+OUTPUT_CSV = "snap_cards.msz_latest.csv"  # writes a fresh CSV in the local repo clone
+
+# Cards to inspect closely during debugging
+SUSPECT_IDS = {
+    "nebula",
+    "black-knight",
+    "martyr",
+    "sebastian-shaw",
+    "scream",
+    "negasonic-teenage-warhead",
+    "scarlet-witch",   # known-good comparison
+    "abomination",     # likely legitimate blank-text comparison
+}
+
+# Cards that are plausibly textless / vanilla enough not to warn on blank rules
+KNOWN_TEXTLESS_IDS = {
+    "abomination",
+    "cyclops",
+    "hulk",
+    "the-thing",
+    "wasp",
+    "shocker",
+}
 
 
 def clean_ability(s: str) -> str:
@@ -47,6 +69,8 @@ def main():
     print(f"Got {len(cards_raw)} raw cards.")
 
     records = []
+    blank_rule_warnings = []
+
     for c in cards_raw:
         url = c.get("url") or ""
         carddefid = c.get("carddefid") or c.get("cardDefId") or ""
@@ -54,9 +78,58 @@ def main():
 
         cost = c.get("cost")
         power = c.get("power")
-        ability_raw = c.get("ability") or ""
-
+        ability_raw = c.get("ability") or c.get("flavor") or ""
         rules = clean_ability(ability_raw)
+
+        # Detailed audit for suspect cards
+        if card_id in SUSPECT_IDS:
+            print("\n" + "=" * 100)
+            print(f"CARD ID:      {card_id}")
+            print(f"NAME:         {c.get('name')}")
+            print(f"CARDDEFID:    {carddefid!r}")
+            print(f"URL:          {url!r}")
+            print(f"COST:         {cost!r}")
+            print(f"POWER:        {power!r}")
+            print(f"ABILITY RAW:  {ability_raw!r}")
+            print(f"ABILITY CLEAN:{rules!r}")
+            print(f"ALL KEYS:     {sorted(c.keys())}")
+
+            # Also print any fields that look text-like or might contain card text
+            interesting_fields = []
+            for k, v in c.items():
+                if not isinstance(v, str):
+                    continue
+                k_lower = str(k).lower()
+                if (
+                    "ability" in k_lower
+                    or "text" in k_lower
+                    or "desc" in k_lower
+                    or "effect" in k_lower
+                    or "rule" in k_lower
+                    or "name" in k_lower
+                ):
+                    interesting_fields.append((k, v))
+
+            if interesting_fields:
+                print("INTERESTING TEXT-LIKE FIELDS:")
+                for k, v in interesting_fields:
+                    print(f"  - {k}: {v!r}")
+            else:
+                print("INTERESTING TEXT-LIKE FIELDS: none found")
+
+        # Warn on suspicious blanks
+        if not rules and card_id not in KNOWN_TEXTLESS_IDS:
+            blank_rule_warnings.append({
+                "id": card_id,
+                "name": c.get("name"),
+                "ability_raw": ability_raw,
+                "carddefid": carddefid,
+                "url": url,
+            })
+            print(
+                f"[WARN] blank rules for {card_id} | "
+                f"name={c.get('name')!r} | raw ability={ability_raw!r}"
+            )
 
         records.append({
             "id": card_id,
@@ -69,7 +142,27 @@ def main():
     df = df.sort_values("id").reset_index(drop=True)
 
     df.to_csv(OUTPUT_CSV, index=False, encoding="utf-8")
-    print(f"Wrote {OUTPUT_CSV} with {len(df)} cards.")
+    print(f"\nWrote {OUTPUT_CSV} with {len(df)} cards.")
+
+    # End summary
+    blank_df = df[df["rules"].fillna("").astype(str).str.strip() == ""].copy()
+    print(f"\nTotal rows with blank rules in CSV: {len(blank_df)}")
+
+    if not blank_df.empty:
+        print("First 50 blank-rule IDs in CSV:")
+        for card_id in blank_df["id"].head(50).tolist():
+            print(f"  - {card_id}")
+
+    if blank_rule_warnings:
+        print(f"\nSuspicious blank-rule warnings emitted: {len(blank_rule_warnings)}")
+        print("First 50 warning rows:")
+        for row in blank_rule_warnings[:50]:
+            print(
+                f"  - id={row['id']!r}, name={row['name']!r}, "
+                f"carddefid={row['carddefid']!r}, raw_ability={row['ability_raw']!r}"
+            )
+    else:
+        print("\nNo suspicious blank-rule warnings emitted.")
 
 
 if __name__ == "__main__":
