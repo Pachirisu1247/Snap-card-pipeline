@@ -1,0 +1,80 @@
+[2026-04-24T23:56:41] [server] Log reset | build=2026-04-24-00-36-overlay-measure-visible
+[2026-04-24T23:56:41] [client] Client build: 2026-04-24-00-36-overlay-measure-visible
+[2026-04-24T23:56:41] [client] === New run started ===
+[2026-04-24T23:56:41] [client] Prepared 3 styled run(s).
+[2026-04-24T23:56:41] [client] Runs: [{"from":0,"to":10,"style":"bold"},{"from":72,"to":81,"style":"italic"},{"from":83,"to":120,"style":"italic"}]
+[2026-04-24T23:56:41] [client] Fetching template PSD...
+[2026-04-24T23:56:41] [server] GET /template.psd -> AgathaNew.psd (43855435 bytes)
+[2026-04-24T23:56:41] [client] Template loaded (43855435 bytes).
+[2026-04-24T23:56:41] [client] Execution strategy: stepwise-overlay-job
+[2026-04-24T23:56:41] [client] Posting template buffer into existing Photopea session...
+[2026-04-24T23:56:41] [status] Opening template...
+[2026-04-24T23:56:45] [client] WATCHDOG: no done after posting template buffer; dispatching job fallback.
+[2026-04-24T23:56:45] [client] Sending job step prepare via template buffer fallback...
+[2026-04-24T23:56:45] [status] Preparing Rules layer...
+[2026-04-24T23:56:45] [message] Received iframe message | extra={"origin": "https://www.photopea.com", "dataKind": "string", "dataPreview": "DBG:prepare:start", "byteLength": null, "stage": "step-running", "busy": true}
+[2026-04-24T23:56:45] [client] From Photopea: DBG:prepare:start
+[2026-04-24T23:56:45] [message] Received iframe message | extra={"origin": "https://www.photopea.com", "dataKind": "string", "dataPreview": "DBG:prepare:baseFamilyKey:null", "byteLength": null, "stage": "step-running", "busy": true}
+[2026-04-24T23:56:45] [client] From Photopea: DBG:prepare:baseFamilyKey:null
+[2026-04-24T23:56:45] [message] Received iframe message | extra={"origin": "https://www.photopea.com", "dataKind": "string", "dataPreview": "STEP:prepare:ok", "byteLength": null, "stage": "step-running", "busy": true}
+[2026-04-24T23:56:45] [client] From Photopea: STEP:prepare:ok
+[2026-04-24T23:56:45] [client] Sending job step overlay:0 via prepare complete...
+[2026-04-24T23:56:45] [status] Applying style run 1 of 3...
+[2026-04-24T23:56:45] [message] Received iframe message | extra={"origin": "https://www.photopea.com", "dataKind": "string", "dataPreview": "done", "byteLength": null, "stage": "step-running", "busy": true}
+[2026-04-24T23:56:45] [message] Received iframe message | extra={"origin": "https://www.photopea.com", "dataKind": "string", "dataPreview": "DBG:overlay:start:0", "byteLength": null, "stage": "step-running", "busy": true}
+[2026-04-24T23:56:45] [client] From Photopea: DBG:overlay:start:0
+[2026-04-24T23:56:45] [message] Received iframe message | extra={"origin": "https://www.photopea.com", "dataKind": "string", "dataPreview": "DBG:overlayStyleApplied:0:bold", "byteLength": null, "stage": "step-running", "busy": true}
+[2026-04-24T23:56:45] [client] From Photopea: DBG:overlayStyleApplied:0:bold
+[2026-04-24T23:56:45] [message] Received iframe message | extra={"origin": "https://www.photopea.com", "dataKind": "string", "dataPreview": "DBG:overlayMeasureZero:0:[object Object],[object Object],[object Object],[object Object]", "byteLength": null, "stage": "step-running", "busy": true}
+[2026-04-24T23:56:45] [message] Received iframe message | extra={"origin": "https://www.photopea.com", "dataKind": "string", "dataPreview": "DBG:overlay:placed:0:dx=0:dy=0", "byteLength": null, "stage": "step-running", "busy": true}
+[2026-04-24T23:56:45] [client] From Photopea: DBG:overlayMeasureZero:0:[object Object],[object Object],[object Object],[object Object]
+[2026-04-24T23:56:45] [client] From Photopea: DBG:overlay:placed:0:dx=0:dy=0
+[2026-04-24T23:56:45] [message] Received iframe message | extra={"origin": "https://www.photopea.com", "dataKind": "string", "dataPreview": "STEP:overlay:ok:0", "byteLength": null, "stage": "step-running", "busy": true}
+[2026-04-24T23:56:45] [client] From Photopea: STEP:overlay:ok:0
+[2026-04-24T23:56:45] [client] Sending job step overlay:1 via overlay complete...
+[2026-04-24T23:56:45] [status] Applying style run 2 of 3...
+[2026-04-24T23:56:45] [message] Received iframe message | extra={"origin": "https://www.photopea.com", "dataKind": "string", "dataPreview": "done", "byteLength": null, "stage": "step-running", "busy": true}
+[2026-04-24T23:56:45] [message] Received iframe message | extra={"origin": "https://www.photopea.com", "dataKind": "string", "dataPreview": "DBG:overlay:start:1", "byteLength": null, "stage": "step-running", "busy": true}
+[2026-04-24T23:56:45] [client] From Photopea: DBG:overlay:start:1
+[2026-04-24T23:56:45] [message] Received iframe message | extra={"origin": "https://www.photopea.com", "dataKind": "string", "dataPreview": "DBG:overlayStyleApplied:1:italic", "byteLength": null, "stage": "step-running", "busy": true}
+[2026-04-24T23:56:45] [client] From Photopea: DBG:overlayStyleApplied:1:italic
+[2026-04-24T23:56:45] [message] Received iframe message | extra={"origin": "https://www.photopea.com", "dataKind": "string", "dataPreview": "DBG:overlayMeasureZero:1:[object Object],[object Object],[object Object],[object Object]", "byteLength": null, "stage": "step-running", "busy": true}
+[2026-04-24T23:56:45] [client] From Photopea: DBG:overlayMeasureZero:1:[object Object],[object Object],[object Object],[object Object]
+[2026-04-24T23:56:45] [message] Received iframe message | extra={"origin": "https://www.photopea.com", "dataKind": "string", "dataPreview": "DBG:overlay:placed:1:dx=0:dy=0", "byteLength": null, "stage": "step-running", "busy": true}
+[2026-04-24T23:56:45] [client] From Photopea: DBG:overlay:placed:1:dx=0:dy=0
+[2026-04-24T23:56:45] [message] Received iframe message | extra={"origin": "https://www.photopea.com", "dataKind": "string", "dataPreview": "STEP:overlay:ok:1", "byteLength": null, "stage": "step-running", "busy": true}
+[2026-04-24T23:56:45] [client] From Photopea: STEP:overlay:ok:1
+[2026-04-24T23:56:45] [client] Sending job step overlay:2 via overlay complete...
+[2026-04-24T23:56:45] [status] Applying style run 3 of 3...
+[2026-04-24T23:56:45] [message] Received iframe message | extra={"origin": "https://www.photopea.com", "dataKind": "string", "dataPreview": "done", "byteLength": null, "stage": "step-running", "busy": true}
+[2026-04-24T23:56:45] [message] Received iframe message | extra={"origin": "https://www.photopea.com", "dataKind": "string", "dataPreview": "DBG:overlay:start:2", "byteLength": null, "stage": "step-running", "busy": true}
+[2026-04-24T23:56:45] [client] From Photopea: DBG:overlay:start:2
+[2026-04-24T23:56:45] [message] Received iframe message | extra={"origin": "https://www.photopea.com", "dataKind": "string", "dataPreview": "DBG:overlayStyleApplied:2:italic", "byteLength": null, "stage": "step-running", "busy": true}
+[2026-04-24T23:56:45] [client] From Photopea: DBG:overlayStyleApplied:2:italic
+[2026-04-24T23:56:45] [message] Received iframe message | extra={"origin": "https://www.photopea.com", "dataKind": "string", "dataPreview": "DBG:overlayMeasureZero:2:[object Object],[object Object],[object Object],[object Object]", "byteLength": null, "stage": "step-running", "busy": true}
+[2026-04-24T23:56:45] [client] From Photopea: DBG:overlayMeasureZero:2:[object Object],[object Object],[object Object],[object Object]
+[2026-04-24T23:56:45] [message] Received iframe message | extra={"origin": "https://www.photopea.com", "dataKind": "string", "dataPreview": "DBG:overlayMeasureZero:2:[object Object],[object Object],[object Object],[object Object]", "byteLength": null, "stage": "step-running", "busy": true}
+[2026-04-24T23:56:45] [client] From Photopea: DBG:overlayMeasureZero:2:[object Object],[object Object],[object Object],[object Object]
+[2026-04-24T23:56:45] [message] Received iframe message | extra={"origin": "https://www.photopea.com", "dataKind": "string", "dataPreview": "DBG:overlay:placed:2:dx=0:dy=0", "byteLength": null, "stage": "step-running", "busy": true}
+[2026-04-24T23:56:45] [client] From Photopea: DBG:overlay:placed:2:dx=0:dy=0
+[2026-04-24T23:56:45] [message] Received iframe message | extra={"origin": "https://www.photopea.com", "dataKind": "string", "dataPreview": "STEP:overlay:ok:2", "byteLength": null, "stage": "step-running", "busy": true}
+[2026-04-24T23:56:45] [client] From Photopea: STEP:overlay:ok:2
+[2026-04-24T23:56:45] [client] Sending job step save via overlay complete...
+[2026-04-24T23:56:45] [status] Saving PSD...
+[2026-04-24T23:56:45] [message] Received iframe message | extra={"origin": "https://www.photopea.com", "dataKind": "string", "dataPreview": "done", "byteLength": null, "stage": "step-running", "busy": true}
+[2026-04-24T23:56:50] [client] WATCHDOG: 5s elapsed. Stage=step-running, ppReady=true
+[2026-04-24T23:56:52] [message] Received iframe message | extra={"origin": "https://www.photopea.com", "dataKind": "string", "dataPreview": "STEP:save:start:styled", "byteLength": null, "stage": "step-running", "busy": true}
+[2026-04-24T23:56:52] [client] From Photopea: STEP:save:start:styled
+[2026-04-24T23:56:52] [status] Waiting for PSD buffer...
+[2026-04-24T23:56:52] [message] Received iframe message | extra={"origin": "https://www.photopea.com", "dataKind": "arraybuffer", "dataPreview": null, "byteLength": 20943622, "stage": "step-running", "busy": true}
+[2026-04-24T23:56:52] [message] Received iframe message | extra={"origin": "https://www.photopea.com", "dataKind": "string", "dataPreview": "SAVE:styled", "byteLength": null, "stage": "step-running", "busy": true}
+[2026-04-24T23:56:52] [client] From Photopea: SAVE:styled
+[2026-04-24T23:56:52] [status] Waiting for PSD buffer...
+[2026-04-24T23:56:52] [message] Received iframe message | extra={"origin": "https://www.photopea.com", "dataKind": "string", "dataPreview": "done", "byteLength": null, "stage": "step-running", "busy": true}
+[2026-04-24T23:56:52] [server] POST /save -> rules_style_poc_styled.psd (20943622 bytes)
+[2026-04-24T23:56:52] [client] Saved rules_style_poc_styled.psd
+[2026-04-24T23:56:52] [status] Saved rules_style_poc_styled.psd
+[2026-04-24T23:59:43] [server] Server starting
+[2026-04-24T23:59:51] [server] Server starting
+[2026-04-24T23:59:58] [server] Server starting
+[2026-04-25T00:00:45] [server] Server starting

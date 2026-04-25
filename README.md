@@ -1,200 +1,414 @@
-# Marvel Snap Physical Cards — Automation Pipeline
+# Marvel Snap Physical Cards --- Automation Pipeline
 
-This repository documents a **fully reproducible, end-to-end pipeline** for generating near-final, print-ready Photoshop (PSD) files for **physical Marvel Snap cards**.
+This repository documents a **fully reproducible, end-to-end pipeline**
+for generating near-final, print-ready Photoshop (PSD) files for
+**physical Marvel Snap cards**.
 
-The design goal is to automate everything that is stable and mechanical (data scraping, logo handling, layout, text replacement), while preserving a **small, intentional manual review step** for final visual polish.
+The design goal is to automate everything that is stable and mechanical
+(data scraping, logo handling, layout, text replacement), while
+preserving a **small, intentional manual review step** for final visual
+polish.
 
-When Marvel Snap releases new cards, this pipeline can be rerun **from scratch** to regenerate hundreds of PSDs with minimal effort.
+When Marvel Snap releases new cards, this pipeline can be rerun **from
+scratch** to regenerate hundreds of PSDs with minimal effort.
 
----
+------------------------------------------------------------------------
 
-## High-Level Pipeline Overview
+# High-Level Pipeline Overview
 
-```
-[ Step 1: Fetch Card Data ]
+    [ Step 1: Fetch Card Data ]
+                ↓
+    [ Step 2: Download Raw Logos ]
+                ↓
+    [ Step 3: Scan, Crop & Upscale Logos ]
+                ↓
+    [ Step 4: Generate PSDs via Photopea ]
+                ↓
+    [ Step 5: Apply Cost/Power Calibration ]
             ↓
-[ Step 2: Download Raw Logos ]
-            ↓
-[ Step 3: Scan, Crop & Upscale Logos ]
-            ↓
-[ Step 4: Generate PSDs via Photopea ]
-```
+[ Step 6: Logo Layout Refinement Pass ]
 
----
+------------------------------------------------------------------------
 
-## Recommended Directory Layout
+# Recommended Directory Layout
 
-```
-Marvel Snap Cards/
-│
-├── photopea_batch/
-│   ├── 01_fetch_cards.py
-│   ├── 02_fetch_logos.py
-│   ├── 03_scan_and_upscale_logos.py
-│   ├── 04_photopea_batch.py
-│   ├── AgathaNew.psd
-│   ├── snap_cards.msz_latest.csv
-│   ├── logos_raw/
-│   ├── logos_upscaled/
-│   ├── output_psd/
-│   └── missing_logos.txt
-│
-└── README.md
-```
+    Marvel Snap Cards/
+    │
+    ├── photopea_batch/
+    │   ├── 01_fetch_cards.py
+    │   ├── 02_fetch_logos.py
+    │   ├── 03_scan_and_upscale_logos.py
+    │   ├── 04_photopea_batch.py
+    │   ├── 05_apply_cost_power_calibration.py
+│   ├── 06_photopea_logo_resize.py
+    │   │
+    │   ├── AgathaNew.psd
+    │   ├── snap_cards.msz_latest.csv
+    │   ├── calibration_table.json
+    │   ├── calibration_bounds_full.csv
+    │   │
+    │   ├── logos_raw/
+    │   ├── logos_upscaled/
+    │   ├── output_psd/
+    │   ├── output_psd_dev/
+    │   ├── output_psd_calibrated/
+│   ├── output_psd_calibrated_logo/
+    │   │
+    │   └── missing_logos.txt
+    │
+    └── README.md
 
-> Large binary assets (PSDs, PNGs) are stored locally / in OneDrive.  
-> Scripts and CSVs are the reproducible source-of-truth.
+Large binaries (PSDs / PNGs) are stored locally or in OneDrive.\
+Scripts and CSVs are the reproducible source of truth.
 
----
+------------------------------------------------------------------------
 
-## Step 1 — Fetch & Normalize Card Data
+# Step 1 --- Fetch & Normalize Card Data
 
 **Script:** `01_fetch_cards.py`
 
-**Source (Card Data):** MarvelSnapZone public API  
-```
+Source:\
 https://marvelsnapzone.com/getinfo/?searchtype=cards&searchcardstype=true
-```
 
-**Output:**
-```
-snap_cards.msz_latest.csv
-```
+Output:\
+`snap_cards.msz_latest.csv`
 
-**Fields:**
-- `id` — normalized slug (`adam-warlock`)
-- `cost`
-- `power`
-- `rules` — HTML-stripped, cleaned ability text
+Fields include:
 
-**Notes:**
-- The `id` field is canonical and drives every downstream step.
-- Includes unreleased/variant/internal entries (these can create expected “logo misses” later).
-- Safe to re-run at any time when new cards are added.
+-   `id` (canonical slug)
+-   `cost`
+-   `power`
+-   `rules`
 
----
+The `id` drives the rest of the pipeline.
 
-## Step 2 — Download Raw Logos
+Safe to rerun whenever new cards appear.
+
+------------------------------------------------------------------------
+
+# Step 2 --- Download Raw Logos
 
 **Script:** `02_fetch_logos.py`
 
-**Input:**
-```
-snap_cards.msz_latest.csv
-```
+Input:\
+`snap_cards.msz_latest.csv`
 
-**Logo Source:**
-```
-https://static.marvelsnap.pro/source/{CardName}_Logo.png
-```
+Logo source pattern:
 
-**Example mapping:**
-```
+https://static.marvelsnap.pro/source/{CardName}\_Logo.png
+
+Example:
+
 absorbing-man → AbsorbingMan_Logo.png
-```
 
-**Output Folder:**
-```
-photopea_batch/logos_raw/
-```
+Output folder:
 
-**Behavior:**
-- Does **not overwrite** existing files.
-- Safe to re-run.
-- Missing logos are tracked (404 / non-image responses).
+`logos_raw/`
 
-**Important quirk you observed (and why reruns can “fix” some misses):**
-- Some files are served as `image/webp` even though the URL ends with `.png`.
-  The downloader should accept any `Content-Type` containing `image/`.
+Behavior:
 
----
+-   does not overwrite existing files
+-   safe to rerun
+-   records missing logos
 
-## Step 3 — Logo Scan, Crop & Upscale
+Note: some logos are served as `image/webp` despite `.png` extension.\
+Downloader accepts any `image/*` response.
+
+------------------------------------------------------------------------
+
+# Step 3 --- Logo Scan, Crop & Upscale
 
 **Script:** `03_scan_and_upscale_logos.py`
 
-**Purpose:** prepare logos for print-quality PSD insertion.
+Purpose:
+
+Prepare logos for print insertion.
 
 Typical operations:
-- Trim excess transparency
-- Normalize bounding boxes
-- Edge cleanup when needed
-- Upscale to high resolution
-- Record scan metadata (optional)
 
-**Input:**
-```
-logos_raw/
-```
+-   trim transparency
+-   normalize bounding boxes
+-   edge cleanup
+-   upscale for print resolution
 
-**Output:**
-```
-logos_upscaled/
-```
+Input:
 
----
+`logos_raw/`
 
-## Step 4 — Automated PSD Generation (Photopea)
+Output:
+
+`logos_upscaled/`
+
+------------------------------------------------------------------------
+
+# Step 4 --- Automated PSD Generation (Photopea)
 
 **Script:** `04_photopea_batch.py`
 
-**Template:**
-```
-AgathaNew.psd
-```
+Template:
 
-**Inputs:**
-- `snap_cards.msz_latest.csv`
-- `logos_upscaled/`
+`AgathaNew.psd`
 
-**Automated actions (per card):**
-- Duplicate template
-- Replace:
-  - Cost
-  - Power
-  - Rules text
-- Insert new logo on its own layer
-- Auto-scale and position logo using anchor bounds
-- Save per-card PSD
+Inputs:
 
-**Output Folder:**
-```
-output_psd/
-```
+-   `snap_cards.msz_latest.csv`
+-   `logos_upscaled/`
 
-Each PSD is ~90% complete.
+Per-card automation:
 
----
+-   duplicate template
+-   replace Cost
+-   replace Power
+-   replace rules text
+-   insert logo layer
+-   auto-scale and position logo
 
-## Manual Review
+Output folder:
 
-A brief manual pass is expected and intentional:
-- Fine-tune logo scale (as needed)
-- Minor text alignment nudges
-- Replace card art backgrounds
+`output_psd/`
 
-Typical time: **~10–30 seconds per card**.
+Cards generated here are roughly **90% complete**.
 
----
+------------------------------------------------------------------------
 
-## Re-Running the Entire Pipeline
+# Step 5 --- Cost & Power Position Calibration
 
-When new cards are released:
+**Script:** `05_apply_cost_power_calibration.py`
 
-1. Run `01_fetch_cards.py`
-2. Run `02_fetch_logos.py`
-3. Run `03_scan_and_upscale_logos.py`
-4. Run `04_photopea_batch.py`
+Purpose:
 
-Nothing is overwritten unless you explicitly change script settings to do so.
+Standardize **Cost** and **Power** text positioning across all cards
+using measured bounds from a manually corrected calibration set.
 
----
+Why this exists:
 
-## Version Control & Backup Strategy
+Different digit widths (e.g., `1` vs `8`) caused slight misalignment in
+Step 4 outputs.\
+Instead of scaling text, this step **repositions layers based on
+calibration data**.
+
+Inputs:
+
+-   `output_psd_dev/`
+-   `calibration_table.json`
+
+Calibration data maps rendered values to bounding boxes.
+
+Example ranges:
+
+-   cost: 0--8
+-   power: roughly -9 to +20
+
+Each value stores:
+
+-   left
+-   top
+-   right
+-   bottom
+
+Process:
+
+1.  open PSD with `psd_tools`
+2.  read card cost/power
+3.  find matching bounds in calibration table
+4.  reposition Cost layer
+5.  reposition Power layer
+6.  save calibrated PSD
+
+Output folder:
+
+`output_psd_calibrated/`
+
+Notes:
+
+-   Only **layer position** is changed
+-   **no scaling** is performed
+-   original PSDs remain untouched
+-   `psd-tools` may emit decompression warnings; visual inspection
+    confirmed outputs remain intact.
+
+------------------------------------------------------------------------
+
+# Calibration Dataset (Important)
+
+The cost/power calibration step depends on a **small manually corrected
+dataset of PSDs** that establish the canonical text positions for each
+rendered numeric value.
+
+These PSDs act as the **reference geometry** used to build
+`calibration_table.json`.
+
+Key properties:
+
+-   Each PSD represents a specific **cost value or power value**
+-   Cost coverage: `0–8`
+-   Power coverage: negative and positive values used by Marvel Snap
+    cards
+-   The **Cost** and **Power** text layers were manually nudged until
+    perfectly centered
+-   Their bounding boxes were then extracted automatically
+
+From those bounds the script builds:
+
+    calibration_table.json
+    calibration_bounds_full.csv
+
+These files drive Step 5.
+
+Important:
+
+-   The calibration PSDs are **not part of the normal pipeline**
+-   They are only needed if the template geometry changes
+
+If the card template is modified, the calibration dataset must be
+regenerated.
+
+------------------------------------------------------------------------
+
+# Pipeline Invariants (Critical Assumptions)
+
+The automation pipeline depends on several **structural invariants** in
+the PSD template and data.\
+If any of these change, parts of the pipeline may break.
+
+## Template PSD
+
+The template `AgathaNew.psd` must contain the following layers:
+
+    Cost
+    Power
+    Rules
+    Logo
+    Art
+
+Important properties:
+
+-   **Cost layer** contains only the numeric cost text
+-   **Power layer** contains only the numeric power text
+-   Text layers must remain **editable text layers**, not rasterized
+-   Font must remain the same across all cards
+-   Text alignment should remain centered
+
+## Layer Naming
+
+Layer names are **case-sensitive** and must remain:
+
+    Cost
+    Power
+    Rules
+    Logo
+
+If these names change, scripts 04 and 05 will fail to locate the layers.
+
+## Card IDs
+
+The pipeline assumes the CSV `id` column matches:
+
+    filename.psd
+    logo naming
+
+Example:
+
+    iron-man → iron-man.psd
+
+and
+
+    IronMan_Logo.png
+
+## Numeric Handling
+
+Cost and power are treated as **strings rendered in text layers**.
+
+The calibration system assumes:
+
+    cost range: 0–8
+    power range: roughly -9 to +20
+
+If Marvel Snap introduces values outside this range, new calibration
+entries may be required.
+
+------------------------------------------------------------------------
+
+
+------------------------------------------------------------------------
+
+# Step 6 --- Logo Layout Refinement (Photopea)
+
+**Script:** `06_photopea_logo_resize.py`
+
+Purpose:
+
+Perform a **second-pass geometric layout correction for logos** after PSD
+generation and cost/power calibration.
+
+During testing it became clear that fully automatic logo placement in
+Step 4 could not reliably produce ideal visual results across hundreds
+of highly irregular Marvel Snap logos. Wide logos (e.g., Ant‑Man),
+blocky logos, and narrow logos all require slightly different vertical
+alignment and scaling behavior.
+
+This step performs a controlled refinement pass using Photopea to:
+
+- reopen each calibrated PSD
+- measure the hidden `Logo` reference layer
+- identify the visible logo layer (`Layer 12`)
+- recompute scale using aspect‑ratio aware heuristics
+- anchor the logo relative to the **bottom art border**
+- apply small global alignment corrections
+- resave the PSD
+
+Input:
+
+`output_psd_calibrated/`
+
+Output:
+
+`output_psd_calibrated_logo/`
+
+Key behaviors:
+
+- aspect‑ratio aware scaling adjustments
+- bottom‑edge anchoring relative to the card art border
+- relaxed boundary clamps to allow intentional logo overhang
+- global horizontal alignment correction
+- automatic fallback to copying the original PSD if a Photopea step fails
+
+This step brings logos to roughly **95% visually correct alignment**
+across the full card set, leaving only minimal manual tweaks if desired.
+
+
+# Manual Review
+
+After Step 5:
+
+-   quick visual scan
+-   minor logo tweaks if desired
+-   art replacement
+
+Typical time:
+
+\~10--30 seconds per card
+
+------------------------------------------------------------------------
+
+# Re-Running the Entire Pipeline
+
+When new cards release:
+
+1.  run `01_fetch_cards.py`
+2.  run `02_fetch_logos.py`
+3.  run `03_scan_and_upscale_logos.py`
+4.  run `04_photopea_batch.py`
+5.  run `05_apply_cost_power_calibration.py`
+
+------------------------------------------------------------------------
+
+# Version Control & Backup Strategy
 
 Recommended:
-- Private GitHub repo for scripts + README (small, safe, diffable)
-- OneDrive for bulky binaries (PSDs, PNGs), or Git LFS if you *really* want them in Git
-- Track CSVs (they’re small and useful for audits)
+
+-   GitHub repo → scripts + README
+-   OneDrive → PSDs / images
+-   CSV files tracked for auditability
 
 The pipeline is fully rebuildable from scratch.
