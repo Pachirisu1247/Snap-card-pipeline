@@ -1,0 +1,47 @@
+﻿{
+    "version":  1,
+    "cards":  {
+                  "headpool":  {
+                                   "status":  "selected",
+                                   "source_kind":  "direct_url",
+                                   "source_url":  "",
+                                   "image_filename":  "headpool.jpg",
+                                   "crop":  {
+                                                "scale":  1,
+                                                "pan_x":  0,
+                                                "pan_y":  0,
+                                                "mode":  "manual"
+                                            },
+                                   "note":  "",
+                                   "updated_at":  "2026-08-04T07:16:54.7876570Z"
+                               },
+                  "havok":  {
+                                "status":  "selected",
+                                "source_kind":  "direct_url",
+                                "source_url":  "https://i.etsystatic.com/7984009/r/il/29f453/5964449227/il_fullxfull.5964449227_hscu.jpg",
+                                "image_filename":  "havok.jpg",
+                                "crop":  {
+                                             "scale":  1,
+                                             "pan_x":  0,
+                                             "pan_y":  0,
+                                             "mode":  "manual"
+                                         },
+                                "note":  "",
+                                "updated_at":  "2026-08-04T07:17:09.8195827Z"
+                            },
+                  "galactus-first-steps":  {
+                                               "status":  "selected",
+                                               "source_kind":  "direct_url",
+                                               "source_url":  "",
+                                               "image_filename":  "galactus-first-steps.jpg",
+                                               "crop":  {
+                                                            "scale":  1,
+                                                            "pan_x":  0,
+                                                            "pan_y":  0,
+                                                            "mode":  "manual"
+                                                        },
+                                               "note":  "",
+                                               "updated_at":  "2026-08-04T07:19:25.5381051Z"
+                                           }
+              }
+}

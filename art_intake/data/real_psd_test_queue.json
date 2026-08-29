@@ -1,0 +1,290 @@
+﻿[
+    {
+        "id":  "havok",
+        "cost":  "2",
+        "power":  "1",
+        "rules":  "End of Turn: You lose 1 Max Energy and this gains +3 Power."
+    },
+    {
+        "id":  "blob",
+        "cost":  "6",
+        "power":  "0",
+        "rules":  "On Reveal: Merge cards from your deck into this until it gains 13 or more Power."
+    },
+    {
+        "id":  "skill01-carnage-champion",
+        "cost":  "1",
+        "power":  "0",
+        "rules":  "On Reveal: Banish this to move your Champion here. Repeat its On Reveal ability."
+    },
+    {
+        "id":  "the-void",
+        "cost":  "4",
+        "power":  "-9",
+        "rules":  "Hello again..."
+    },
+    {
+        "id":  "ironheart",
+        "cost":  "3",
+        "power":  "0",
+        "rules":  "On Reveal: Give 2 of your other cards +3 Power."
+    },
+    {
+        "id":  "juggernaut",
+        "cost":  "4",
+        "power":  "5",
+        "rules":  "On Reveal: Move away all enemy cards played here this turn. (including unrevealed cards)"
+    },
+    {
+        "id":  "iron-fist",
+        "cost":  "1",
+        "power":  "3",
+        "rules":  "On Reveal: After you play your next card, move it one location to the left."
+    },
+    {
+        "id":  "mobius-m-mobius",
+        "cost":  "3",
+        "power":  "3",
+        "rules":  "Ongoing: Your Costs can\u0027t be increased. Your opponent\u0027s Costs can\u0027t be reduced."
+    },
+    {
+        "id":  "zombie-giant-man",
+        "cost":  "5",
+        "power":  "4",
+        "rules":  "On Reveal: Horde +2, then this gains Power equal to your Zombie Horde."
+    },
+    {
+        "id":  "sage",
+        "cost":  "3",
+        "power":  "0",
+        "rules":  "On Reveal: +2 Power for each different Power among all other cards here."
+    },
+    {
+        "id":  "orka",
+        "cost":  "6",
+        "power":  "11",
+        "rules":  "Ongoing: +7 Power if this is your only card here."
+    },
+    {
+        "id":  "storm",
+        "cost":  "3",
+        "power":  "1",
+        "rules":  "On Reveal: Flood this location. Next turn is the last turn cards can be played here."
+    },
+    {
+        "id":  "zombie-galacti",
+        "cost":  "7",
+        "power":  "5",
+        "rules":  "Game Start: Choose 6 other characters in your deck. On Reveal: Transform those cards into copies of this."
+    },
+    {
+        "id":  "galacta",
+        "cost":  "4",
+        "power":  "6",
+        "rules":  "Each turn, the first card you play at another location reveals with +2 Power."
+    },
+    {
+        "id":  "ajax",
+        "cost":  "5",
+        "power":  "7",
+        "rules":  "Ongoing: +1 Power for each card in play afflicted with negative Power."
+    },
+    {
+        "id":  "moon-girl",
+        "cost":  "4",
+        "power":  "5",
+        "rules":  "On Reveal: Copy your hand."
+    },
+    {
+        "id":  "program01-herbie",
+        "cost":  "2",
+        "power":  "3",
+        "rules":  "Activate: Next turn, you get +2 Energy."
+    },
+    {
+        "id":  "giganto",
+        "cost":  "6",
+        "power":  "16",
+        "rules":  "You can only play this at the left location."
+    },
+    {
+        "id":  "gladiator",
+        "cost":  "3",
+        "power":  "8",
+        "rules":  "On Reveal: Add a card from your opponent\u0027s deck to their side of this location. If it has less Power, destroy it."
+    },
+    {
+        "id":  "mr-negative",
+        "cost":  "4",
+        "power":  "-1",
+        "rules":  "On Reveal: Swap the Power and Cost of all cards in your deck."
+    },
+    {
+        "id":  "mirage",
+        "cost":  "2",
+        "power":  "3",
+        "rules":  "On Reveal: Copy the character that costs the least from your opponent\u0027s hand into your hand. Give it +2 Power."
+    },
+    {
+        "id":  "galactus-first-steps",
+        "cost":  "6",
+        "power":  "12",
+        "rules":  "My Herald is the next character I see you play. End of Turn: +2 Power if you\u0027re winning my Herald\u0027s location. (if in hand or in play)"
+    },
+    {
+        "id":  "toxie-doxie",
+        "cost":  "2",
+        "power":  "3",
+        "rules":  "On Reveal: Give 2 characters in your hand +2 Power. You can\u0027t play them next turn."
+    },
+    {
+        "id":  "black-widow",
+        "cost":  "3",
+        "power":  "3",
+        "rules":  "Activate: Add a Widow\u0027s Bite to your opponent\u0027s hand."
+    },
+    {
+        "id":  "sunspot",
+        "cost":  "1",
+        "power":  "0",
+        "rules":  "End of Turn: Gain +1 Power for each unspent Energy."
+    },
+    {
+        "id":  "skill01-mr-fantastic-champion",
+        "cost":  "2",
+        "power":  "0",
+        "rules":  "On Reveal: Give an Ongoing card in your hand -1 Cost and +1 Power. After you play it, repeat this."
+    },
+    {
+        "id":  "jessica-jones",
+        "cost":  "4",
+        "power":  "5",
+        "rules":  "On Reveal: If you don\u0027t play a card at this location next turn, +5 Power."
+    },
+    {
+        "id":  "hope-summers",
+        "cost":  "3",
+        "power":  "4",
+        "rules":  "After you play a card here, you get +1 Energy next turn."
+    },
+    {
+        "id":  "ninja",
+        "cost":  "1",
+        "power":  "-2",
+        "rules":  "\"I serve the Hand.\""
+    },
+    {
+        "id":  "the-thing",
+        "cost":  "4",
+        "power":  "7",
+        "rules":  "\"It\u0027s clobberin\u0027 time!\""
+    },
+    {
+        "id":  "zombie-horde",
+        "cost":  "0",
+        "power":  "0",
+        "rules":  "GrARRgh!"
+    },
+    {
+        "id":  "typhoid-mary",
+        "cost":  "4",
+        "power":  "10",
+        "rules":  "Ongoing: Your other cards here have -2 Power."
+    },
+    {
+        "id":  "mysterio-illusion",
+        "cost":  "2",
+        "power":  "0",
+        "rules":  "Which is the real Mysterio?"
+    },
+    {
+        "id":  "groot",
+        "cost":  "3",
+        "power":  "4",
+        "rules":  "On Reveal: If your opponent played a card here this turn, +4 Power."
+    },
+    {
+        "id":  "kang",
+        "cost":  "3",
+        "power":  "4",
+        "rules":  "Game Start: Replace this with 4 Kangs with text from random cards that Cost 3 or more."
+    },
+    {
+        "id":  "uatu",
+        "cost":  "1",
+        "power":  "2",
+        "rules":  "Game Start: You can see the unrevealed locations."
+    },
+    {
+        "id":  "skill01-thor-champion",
+        "cost":  "2",
+        "power":  "0",
+        "rules":  "On Reveal: Shuffle Mjolnir into your deck. Draw a card."
+    },
+    {
+        "id":  "dormammu",
+        "cost":  "7",
+        "power":  "13",
+        "rules":  "Game Start: Begin a Summoning Ritual. (Add step 1 to hand.)"
+    },
+    {
+        "id":  "gilgamesh",
+        "cost":  "5",
+        "power":  "9",
+        "rules":  "On Reveal: +1 Power for each of your other cards in play with increased Power."
+    },
+    {
+        "id":  "jean-grey-x-men",
+        "cost":  "3",
+        "power":  "5",
+        "rules":  "!Ongoing: You can move a friendly X-Man away from here each turn."
+    },
+    {
+        "id":  "death",
+        "cost":  "8",
+        "power":  "12",
+        "rules":  "Costs 1 less for each card destroyed this game."
+    },
+    {
+        "id":  "headpool",
+        "cost":  "1",
+        "power":  "1",
+        "rules":  "When Destroyed: Return this to your hand, then give all cards in your hand +1 Power."
+    },
+    {
+        "id":  "eson",
+        "cost":  "6",
+        "power":  "10",
+        "rules":  "End of Turn: Put a created card from your hand here."
+    },
+    {
+        "id":  "destroyer",
+        "cost":  "6",
+        "power":  "18",
+        "rules":  "On Reveal: Destroy your cards at other locations."
+    },
+    {
+        "id":  "red-skull",
+        "cost":  "5",
+        "power":  "14",
+        "rules":  "Ongoing: Enemy cards here have +2 Power."
+    },
+    {
+        "id":  "black-swan",
+        "cost":  "2",
+        "power":  "3",
+        "rules":  "Activate: Until the end of next turn, your 1-Cost cards cost 0."
+    },
+    {
+        "id":  "viv",
+        "cost":  "3",
+        "power":  "4",
+        "rules":  "At the start of each turn, give all cards in your hand +1 Power if you\u0027re winning here. Otherwise, move this to another location."
+    },
+    {
+        "id":  "zombie-scarlet-witch",
+        "cost":  "3",
+        "power":  "4",
+        "rules":  "After you play a card here, Horde +2."
+    }
+]
