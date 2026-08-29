@@ -1,0 +1,290 @@
+﻿[
+    {
+        "id":  "vibro-shock-gauntlets",
+        "cost":  "1",
+        "power":  "0",
+        "rules":  "On Reveal: Give your highest-Power card here +2 Power. You get +1 Energy next turn."
+    },
+    {
+        "id":  "galactus-first-steps",
+        "cost":  "6",
+        "power":  "12",
+        "rules":  "My Herald is the next character I see you play. End of Turn: +2 Power if you\u0027re winning my Herald\u0027s location. (if in hand or in play)"
+    },
+    {
+        "id":  "deathlok",
+        "cost":  "3",
+        "power":  "5",
+        "rules":  "On Reveal: Destroy your other cards here."
+    },
+    {
+        "id":  "juggernaut-horseman",
+        "cost":  "2",
+        "power":  "2",
+        "rules":  "Objective: Have 7 different Powers among your other cards in play +6 Power. (0/7)"
+    },
+    {
+        "id":  "luke-cage",
+        "cost":  "3",
+        "power":  "2",
+        "rules":  "Ongoing: Your cards can\u0027t have their Power reduced."
+    },
+    {
+        "id":  "heimdall",
+        "cost":  "6",
+        "power":  "10",
+        "rules":  "On Reveal: Move your other cards one location to the left."
+    },
+    {
+        "id":  "black-panther",
+        "cost":  "5",
+        "power":  "5",
+        "rules":  "On Reveal: Double this card\u0027s Power."
+    },
+    {
+        "id":  "blade",
+        "cost":  "1",
+        "power":  "3",
+        "rules":  "On Reveal: Discard the rightmost card from your hand."
+    },
+    {
+        "id":  "anti-venom",
+        "cost":  "4",
+        "power":  "7",
+        "rules":  "On Reveal: Set the Cost and Power of your deck\u0027s top card to 0."
+    },
+    {
+        "id":  "captain-carter",
+        "cost":  "3",
+        "power":  "2",
+        "rules":  "Ongoing: Add this card\u0027s Power to your back-row cards here. (can\u0027t add to itself)"
+    },
+    {
+        "id":  "skill01-weapon-x-wolverine-champion",
+        "cost":  "2",
+        "power":  "0",
+        "rules":  "On Reveal: Destroy your cards here with less Power than your Champion. Add a copy of this to your hand with +1 Cost."
+    },
+    {
+        "id":  "howard-the-duck",
+        "cost":  "1",
+        "power":  "2",
+        "rules":  "Ongoing: Tap this to see the top card of your deck."
+    },
+    {
+        "id":  "bug",
+        "cost":  "0",
+        "power":  "0",
+        "rules":  "!none"
+    },
+    {
+        "id":  "dormammu",
+        "cost":  "7",
+        "power":  "13",
+        "rules":  "Game Start: Begin a Summoning Ritual. (Add step 1 to hand.)"
+    },
+    {
+        "id":  "spell07-nico-minoru",
+        "cost":  "1",
+        "power":  "2",
+        "rules":  "On Reveal: After you play your next card, double this card\u0027s Power."
+    },
+    {
+        "id":  "kraglin",
+        "cost":  "3",
+        "power":  "3",
+        "rules":  "On Reveal: Banish the top card of your deck. If it was 4-Cost or higher, +2 Energy next turn, otherwise give this +4 Power."
+    },
+    {
+        "id":  "nick-fury",
+        "cost":  "4",
+        "power":  "6",
+        "rules":  "On Reveal: Add 3 random 6-Cost cards to your hand."
+    },
+    {
+        "id":  "blink",
+        "cost":  "5",
+        "power":  "8",
+        "rules":  "On Reveal: Swap the last card you played with a card that costs more from your deck."
+    },
+    {
+        "id":  "war-machine",
+        "cost":  "5",
+        "power":  "9",
+        "rules":  "Ongoing: Nothing can stop you from playing cards anywhere."
+    },
+    {
+        "id":  "thaddeus-ross",
+        "cost":  "2",
+        "power":  "2",
+        "rules":  "End of Turn: If your opponent has unspent Energy, draw a card with 10 or more Power."
+    },
+    {
+        "id":  "jubilee-x-men",
+        "cost":  "4",
+        "power":  "2",
+        "rules":  "!On Reveal: Add the top card of your deck to this location. Give it Power equal to Jubilee\u0027s Power."
+    },
+    {
+        "id":  "cassandra-nova",
+        "cost":  "3",
+        "power":  "0",
+        "rules":  "On Reveal: Steal 1 Power from each card in your opponent\u0027s deck."
+    },
+    {
+        "id":  "snowguard",
+        "cost":  "1",
+        "power":  "2",
+        "rules":  "On Reveal: Add the Hawk and Bear auroras to your hand."
+    },
+    {
+        "id":  "drax-avatar-of-life",
+        "cost":  "3",
+        "power":  "4",
+        "rules":  "End of Turn: +3 Power if your opponent played a card with greater Power this turn. Move to that card if you\u0027d be winning its location."
+    },
+    {
+        "id":  "squirrel-girl",
+        "cost":  "1",
+        "power":  "2",
+        "rules":  "On Reveal: Add a 1-Power Squirrel to each other location."
+    },
+    {
+        "id":  "fan-fei",
+        "cost":  "4",
+        "power":  "5",
+        "rules":  "Activate: Give your other cards here +1 Power and move them to the right."
+    },
+    {
+        "id":  "madame-web",
+        "cost":  "2",
+        "power":  "1",
+        "rules":  "Ongoing: You can move one of your other cards away from here each turn."
+    },
+    {
+        "id":  "moon-knight",
+        "cost":  "3",
+        "power":  "3",
+        "rules":  "On Reveal: Discard an even-costed card from each player\u0027s hand."
+    },
+    {
+        "id":  "mantis-guardians-of-the-galaxy",
+        "cost":  "1",
+        "power":  "1",
+        "rules":  "!On Reveal: If your opponent played a card here this turn, give a Guardian in your hand -2 Cost."
+    },
+    {
+        "id":  "forge",
+        "cost":  "2",
+        "power":  "2",
+        "rules":  "On Reveal: Give the next card you play +2 Power."
+    },
+    {
+        "id":  "sera",
+        "cost":  "5",
+        "power":  "5",
+        "rules":  "Ongoing: Cards in your hand cost 1 less. (minimum 1)"
+    },
+    {
+        "id":  "dragon-man",
+        "cost":  "4",
+        "power":  "6",
+        "rules":  "End of Turn: +1 Power for each location that\u0027s full on your side."
+    },
+    {
+        "id":  "sub-mariner",
+        "cost":  "2",
+        "power":  "3",
+        "rules":  "!When this is boosted (in hand or in play), add a random 1-Cost Character to your hand boosted by the same amount."
+    },
+    {
+        "id":  "scream",
+        "cost":  "2",
+        "power":  "1",
+        "rules":  "When an enemy card moves, steal 2 Power from it. (once per turn)"
+    },
+    {
+        "id":  "swarm",
+        "cost":  "2",
+        "power":  "3",
+        "rules":  "When Discarded: Add two copies of this that cost 0 to your hand."
+    },
+    {
+        "id":  "sasquatch",
+        "cost":  "6",
+        "power":  "11",
+        "rules":  "Costs 1 less for each card you played last turn."
+    },
+    {
+        "id":  "gambit",
+        "cost":  "3",
+        "power":  "3",
+        "rules":  "On Reveal: Discard a card from your hand to destroy a random enemy card."
+    },
+    {
+        "id":  "captain-america-champion",
+        "cost":  "3",
+        "power":  "3",
+        "rules":  "Ongoing: Your other Ongoing cards here have +2 Power."
+    },
+    {
+        "id":  "nightmare",
+        "cost":  "3",
+        "power":  "1",
+        "rules":  "On Reveal: Replace the text of each card in your hand with text from a random card of the same Cost."
+    },
+    {
+        "id":  "monster",
+        "cost":  "6",
+        "power":  "10",
+        "rules":  "Careful...he likes to mash."
+    },
+    {
+        "id":  "mjolnir",
+        "cost":  "0",
+        "power":  "0",
+        "rules":  "On Reveal: Give Thor +7 Power."
+    },
+    {
+        "id":  "celestial-empowerment",
+        "cost":  "0",
+        "power":  "0",
+        "rules":  "!none"
+    },
+    {
+        "id":  "omega-red",
+        "cost":  "4",
+        "power":  "6",
+        "rules":  "Ongoing: If you\u0027re winning here, +3 Power to other locations."
+    },
+    {
+        "id":  "super-adaptoid",
+        "cost":  "3",
+        "power":  "5",
+        "rules":  "On Reveal: Steal the text from an enemy Activate card here."
+    },
+    {
+        "id":  "doctor-strange-avengers",
+        "cost":  "0",
+        "power":  "0",
+        "rules":  "!none"
+    },
+    {
+        "id":  "gamora",
+        "cost":  "5",
+        "power":  "8",
+        "rules":  "On Reveal: If your opponent played a card here this turn, +4 Power."
+    },
+    {
+        "id":  "adamantium-infusion",
+        "cost":  "4",
+        "power":  "0",
+        "rules":  "On Reveal: Revive your highest-Power destroyed card here with its Power doubled."
+    },
+    {
+        "id":  "taskmaster-thunderbolts",
+        "cost":  "6",
+        "power":  "0",
+        "rules":  "!On Reveal: Set this card\u0027s Power equal to the total Power of Thunderbolts you played last turn."
+    }
+]

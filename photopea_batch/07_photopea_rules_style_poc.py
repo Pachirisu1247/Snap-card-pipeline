@@ -25,7 +25,7 @@ from pathlib import Path
 from flask import Flask, Response, jsonify, request, send_file, url_for
 
 PORT = 5002
-APP_BUILD = "2026-04-25-00-03-layout-preserving-overlays"
+APP_BUILD = "2026-04-25-01-18-nbsp-cutouts-overlay-above"
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATE_PSD = BASE_DIR / "AgathaNew.psd"
 OUTPUT_DIR = BASE_DIR / "output_rules_style_poc"
@@ -289,9 +289,7 @@ INDEX_HTML = r"""
       </div>
 
       <label for="rulesText"><strong>Sample rules text</strong></label>
-      <textarea id="rulesText">On Reveal: If the last card you played has an On Reveal, copy its text. (if able)
-
-"Foolish rabble! You are beneath me!"</textarea>
+      <textarea id="rulesText">Game Start: Draw Agatha. She controls your cards on even turns.</textarea>
 
       <p>
         The default parser marks leading gameplay keywords as bold, parenthetical
@@ -384,7 +382,7 @@ INDEX_HTML = r"""
         }
       }, 3500));
       watchdogTimers.push(setTimeout(() => {
-        if (busy && currentStage === "step-running") {
+        if (busy && currentStage === "step-running" && (!currentJob || currentJob.awaitingStep !== "save")) {
           const stuckStep = currentJob && currentJob.awaitingStep ? currentJob.awaitingStep : "unknown";
           log("WATCHDOG: step appears stuck (" + stuckStep + "); requesting plain-text fallback save.");
           setStatus("Styling appears stuck; saving plain-text fallback...");
@@ -395,6 +393,8 @@ INDEX_HTML = r"""
           } catch (e) {
             log("ERR:plainSaveFallback:" + e);
           }
+        } else if (busy && currentStage === "step-running" && currentJob && currentJob.awaitingStep === "save") {
+          log("WATCHDOG: save step still running; allowing extra time.");
         }
       }, 8000));
       watchdogTimers.push(setTimeout(() => {
@@ -594,6 +594,7 @@ INDEX_HTML = r"""
       const text = normalizeText(fullText);
       const runs = [];
       const keywords = [
+        "Game Start:",
         "On Reveal:",
         "Ongoing:",
         "Activate:",
@@ -1019,21 +1020,69 @@ INDEX_HTML = r"""
             if (!family) return null;
             return family[desired] || family.plain || null;
           }
+          function buildWholeLayerStyle(desired) {
+            var variant = variantFor(desired);
+            if (!variant) return null;
+            var hasRealVariant = !!(variant.postScriptName || variant.styleName);
+            var styled = {
+              styleSheetHasParent: true,
+              syntheticBold: false,
+              fauxBold: false,
+              syntheticItalic: false,
+              fauxItalic: false,
+              italics: false
+            };
+            if (variant.postScriptName) styled.fontName = variant.postScriptName;
+            if (variant.family) styled.fontFamily = variant.family;
+            if (variant.styleName) styled.fontStyleName = variant.styleName;
+            if (variant.postScriptName) styled.fontPostScriptName = variant.postScriptName;
+            if (desired === "bold" && !hasRealVariant) {
+              styled.syntheticBold = true;
+              styled.fauxBold = true;
+            } else if (desired === "italic" && !hasRealVariant) {
+              styled.syntheticItalic = true;
+              styled.fauxItalic = true;
+              styled.italics = true;
+            }
+            return styled;
+          }
           function applyVariant(layer, desired) {
             var variant = variantFor(desired);
-            if (!variant) {
+            var styled = buildWholeLayerStyle(desired);
+            if (!variant || !styled) {
               say("ERR:prepare:noVariant:" + desired);
               return false;
+            }
+            say("DBG:prepare:variant:" + desired + ":" + JSON.stringify(variant));
+            try {
+              layer.textItem.totalTextStyle = JSON.stringify(styled);
+              say("DBG:prepare:styleMode:" + desired + ":totalTextStyle");
+            } catch (e1) {
+              say("ERR:prepare:totalTextStyle:" + desired + ":" + e1);
             }
             try {
               if (variant.postScriptName) layer.textItem.fontName = variant.postScriptName;
               if (variant.family) layer.textItem.fontFamily = variant.family;
               if (variant.styleName) layer.textItem.fontStyleName = variant.styleName;
+              say("DBG:prepare:styleMode:" + desired + ":directProps");
               return true;
-            } catch (e) {
-              say("ERR:prepare:applyVariant:" + desired + ":" + e);
-              return false;
+            } catch (e2) {
+              say("ERR:prepare:applyVariant:" + desired + ":" + e2);
             }
+            return false;
+          }
+          function makeBaseText(fullText, runs) {
+            if (!payload.styled || !runs || !runs.length) return String(fullText);
+            var chars = String(fullText).split("");
+            for (var r = 0; r < runs.length; r++) {
+              var run = runs[r];
+              for (var i = run.from; i < run.to && i < chars.length; i++) {
+                if (i >= 0 && chars[i] !== "\\n") {
+                  chars[i] = "\\u00A0";
+                }
+              }
+            }
+            return chars.join("");
           }
           try {
             say("DBG:prepare:start");
@@ -1052,12 +1101,13 @@ INDEX_HTML = r"""
               return;
             }
             doc.activeLayer = rulesLayer;
-            rulesLayer.textItem.contents = payload.text;
+            rulesLayer.textItem.contents = makeBaseText(payload.text, payload.runs);
             applyVariant(rulesLayer, "plain");
             var base = {};
             try {
               base = JSON.parse(rulesLayer.textItem.totalTextStyle || "{}");
             } catch (eStyle) {}
+            say("DBG:prepare:baseMode:" + (payload.styled ? "cutout" : "full"));
             say("DBG:prepare:rulesFamilyKey:" + payload.rulesFamilyKey);
             say("DBG:prepare:baseFamilyKey:" + familyKeyFromBase(base));
             say("STEP:prepare:ok");
@@ -1092,21 +1142,55 @@ INDEX_HTML = r"""
             if (!family) return null;
             return family[desired] || family.plain || null;
           }
+          function buildWholeLayerStyle(desired) {
+            var variant = variantFor(desired);
+            if (!variant) return null;
+            var hasRealVariant = !!(variant.postScriptName || variant.styleName);
+            var styled = {
+              styleSheetHasParent: true,
+              syntheticBold: false,
+              fauxBold: false,
+              syntheticItalic: false,
+              fauxItalic: false,
+              italics: false
+            };
+            if (variant.postScriptName) styled.fontName = variant.postScriptName;
+            if (variant.family) styled.fontFamily = variant.family;
+            if (variant.styleName) styled.fontStyleName = variant.styleName;
+            if (variant.postScriptName) styled.fontPostScriptName = variant.postScriptName;
+            if (desired === "bold" && !hasRealVariant) {
+              styled.syntheticBold = true;
+              styled.fauxBold = true;
+            } else if (desired === "italic" && !hasRealVariant) {
+              styled.syntheticItalic = true;
+              styled.fauxItalic = true;
+              styled.italics = true;
+            }
+            return styled;
+          }
           function applyVariant(layer, desired) {
             var variant = variantFor(desired);
+            var styled = buildWholeLayerStyle(desired);
             try {
-              if (!variant) {
+              if (!variant || !styled) {
                 say("ERR:overlay:noVariant:" + payload.index + ":" + desired);
                 return;
               }
+              say("DBG:overlayVariant:" + payload.index + ":" + desired + ":" + JSON.stringify(variant));
+              layer.textItem.totalTextStyle = JSON.stringify(styled);
+              say("DBG:overlayStyleApplied:" + payload.index + ":" + desired + ":totalTextStyle");
+            } catch (e1) {
+              say("ERR:overlayStyleTotal:" + payload.index + ":" + desired + ":" + e1);
+            }
+            try {
               if (variant.postScriptName) layer.textItem.fontName = variant.postScriptName;
               if (variant.family) layer.textItem.fontFamily = variant.family;
               if (variant.styleName) {
                 layer.textItem.fontStyleName = variant.styleName;
               }
-              say("DBG:overlayStyleApplied:" + payload.index + ":" + desired);
-            } catch (e) {
-              say("ERR:overlayStyle:" + payload.index + ":" + e);
+              say("DBG:overlayStyleApplied:" + payload.index + ":" + desired + ":directProps");
+            } catch (e2) {
+              say("ERR:overlayStyle:" + payload.index + ":" + e2);
             }
           }
           function makeOverlayText(fullText, run) {
@@ -1114,10 +1198,29 @@ INDEX_HTML = r"""
             for (var i = 0; i < chars.length; i++) {
               var keep = i >= run.from && i < run.to;
               if (!keep && chars[i] !== "\\n") {
-                chars[i] = " ";
+                chars[i] = "\\u00A0";
               }
             }
             return chars.join("");
+          }
+          function lineStartPrefix(fullText, run) {
+            var text = String(fullText);
+            if (run.from === 0) return "";
+            var cursor = 0;
+            var lines = text.split("\\n");
+            for (var i = 0; i < lines.length; i++) {
+              var line = lines[i];
+              var lineStart = cursor;
+              var lineEnd = cursor + line.length;
+              if (run.from >= lineStart && run.to <= lineEnd) {
+                if (run.from === lineStart) {
+                  return new Array(i + 1).join("\\n");
+                }
+                return null;
+              }
+              cursor = lineEnd + 1;
+            }
+            return null;
           }
           try {
             say("DBG:overlay:start:" + payload.index);
@@ -1135,7 +1238,20 @@ INDEX_HTML = r"""
             overlay.name = "Rules Overlay " + payload.index + " " + payload.run.style;
             overlay.visible = true;
             overlay.opacity = 100;
-            overlay.textItem.contents = makeOverlayText(payload.text, payload.run);
+            try {
+              overlay.move(rulesLayer, ElementPlacement.PLACEBEFORE);
+              say("DBG:overlay:moveAbove:" + payload.index);
+            } catch (eMove) {
+              say("ERR:overlayMove:" + payload.index + ":" + eMove);
+            }
+            var prefix = lineStartPrefix(payload.text, payload.run);
+            if (prefix !== null) {
+              overlay.textItem.contents = prefix + payload.text.slice(payload.run.from, payload.run.to);
+              say("DBG:overlay:mode:" + payload.index + ":line-start");
+            } else {
+              overlay.textItem.contents = makeOverlayText(payload.text, payload.run);
+              say("DBG:overlay:mode:" + payload.index + ":layout-preserved");
+            }
             applyVariant(overlay, payload.run.style);
             say("DBG:overlay:layoutPreserved:" + payload.index + ":from=" + payload.run.from + ":to=" + payload.run.to);
             say("STEP:overlay:ok:" + payload.index);
@@ -1266,8 +1382,12 @@ INDEX_HTML = r"""
       }
 
       if (e.data instanceof ArrayBuffer) {
+        clearWatchdogs();
+        const outName = "rules_style_poc_" + pendingSaveLabel + ".psd";
+        busy = false;
+        currentStage = "saving-buffer";
+        currentJob = null;
         try {
-          const outName = "rules_style_poc_" + pendingSaveLabel + ".psd";
           await uploadPsd(outName, e.data);
           log("Saved " + outName);
           setStatus("Saved " + outName);
@@ -1275,10 +1395,7 @@ INDEX_HTML = r"""
           log("ERR:save:" + err);
           setStatus("Save failed");
         } finally {
-          clearWatchdogs();
-          busy = false;
           currentStage = "idle";
-          currentJob = null;
         }
         return;
       }

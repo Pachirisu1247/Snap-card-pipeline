@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Render Real PSD Overlays — Art Desk</title>
+  <style>
+    body{margin:0;padding:20px;background:#161821;color:#f3ead9;font:14px/1.4 Segoe UI,Arial,sans-serif}h1{margin:0 0 6px;font:700 22px Georgia,serif}.panel{max-width:880px;margin:0 auto;padding:18px;border:1px solid #454b62;border-radius:12px;background:#20232f}.warning{color:#e8c175}.status{margin:13px 0;font-weight:700}button{padding:9px 14px;border:1px solid #bd8c39;border-radius:8px;background:#805b22;color:white;font:600 14px inherit;cursor:pointer}button:disabled{opacity:.5;cursor:not-allowed}#log{margin-top:15px;max-height:260px;overflow:auto;padding:12px;background:#101119;border:1px solid #393f55;border-radius:8px;white-space:pre-wrap;font:12px/1.45 Consolas,monospace}iframe{display:none}
+  </style>
+</head>
+<body>
+  <div class="panel">
+    <h1>Render actual PSD review overlays</h1>
+    <p>This one-time utility opens each real generated PSD in Photopea, hides only its <code>Art</code> layer, and saves a compact transparent PNG overlay containing the actual frame, logo, Cost, Power, and Rules layers.</p>
+    <p class="warning">It never changes the source PSDs. It writes only cached review overlays into <code>art_intake/assets/template_overlays</code>.</p>
+    <button id="start">Render real PSD overlays</button><span class="status" id="status">Preparing…</span>
+    <div id="log"></div>
+  </div>
+  <iframe id="photopea" title="Photopea renderer"></iframe>
+  <script>
+    const PHOTOPEA='https://www.photopea.com';
+    const fontFiles=['cc-ultimatum-regular.otf','cc-ultimatum-bold.otf','cc-ultimatum-italic.otf','CCElephantmenTall Regular.ttf','CCElephantmenTall W10 Bold.ttf','CCElephantmenTall Bold Italic.ttf'];
+    const frame=document.getElementById('photopea'),start=document.getElementById('start'),status=document.getElementById('status'),logEl=document.getElementById('log');
+    let queue=[],index=0,pp=null,ready=false,queueLoaded=false,phase='idle',current=null,errors=[];
+    const log=m=>{logEl.textContent+=m+'\n';logEl.scrollTop=logEl.scrollHeight;console.log(m)};
+    const say=m=>status.textContent=m;
+    function photopeaUrl(){return PHOTOPEA+'#'+encodeURIComponent(JSON.stringify({resources:fontFiles.map(name=>location.origin+'/font/'+encodeURIComponent(name))}));}
+    function asDataUrl(buffer){let binary='',bytes=new Uint8Array(buffer);for(let i=0;i<bytes.length;i+=0x8000)binary+=String.fromCharCode(...bytes.subarray(i,i+0x8000));return 'data:image/png;base64,'+btoa(binary)}
+    async function startNext(){
+      if(index>=queue.length){phase='done';say(`Complete: ${queue.length-errors.length} rendered, ${errors.length} errors.`);start.disabled=false;log(errors.length?`Errors:\n${errors.join('\n')}`:'All real PSD overlays rendered successfully.');return}
+      current=queue[index++];phase='opening';say(`Opening ${index} of ${queue.length}: ${current.id}`);log(`OPEN ${current.id}`);
+      const response=await fetch('/psd/'+encodeURIComponent(current.id),{cache:'no-store'});if(!response.ok)throw Error(`PSD fetch failed (${response.status})`);pp.postMessage(await response.arrayBuffer(),'*');
+      // Photopea sometimes opens a buffer but omits its usual "done" message.
+      // This is the same condition handled by the existing batch pipeline.
+      const openingCard=current.id;
+      setTimeout(()=>{if(phase==='opening'&&current&&current.id===openingCard){log(`OPEN fallback ${openingCard}`);sendRenderScript()}},7000);
+    }
+    function sendRenderScript(){
+      phase='saving';say(`Rendering ${current.id}…`);
+      pp.postMessage(`(function(){function say(m){try{app.echoToOE(m)}catch(ignore){}}function hideArtwork(layers){var hidden=[];for(var i=0;i<layers.length;i++){var l=layers[i];if(l.layers)hidden=hidden.concat(hideArtwork(l.layers));var isArt=(l.name==='Art'||l.name==='upscalemedia-transformed.webp'||(l.name==='Background'&&i>3));if(isArt){l.visible=false;hidden.push(l.name+'@'+i)}}return hidden}try{say('RENDER:doc:${current.id}');var doc=app.activeDocument;if(!doc)throw new Error('No active document');var hidden=hideArtwork(doc.layers);if(!hidden.length)throw new Error('Missing editable/template art layer');say('RENDER:hide:${current.id}:'+hidden.join(','));say('RENDER:save:${current.id}');doc.saveToOE('png');}catch(e){say('ERR:render:${current.id}:'+(e&&e.message?e.message:String(e)))}})();`,'*');
+    }
+    async function saveOverlay(buffer){
+      say(`Saving ${current.id} overlay…`);const response=await fetch('/api/save-template-overlay',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({card_id:current.id,image_data_url:asDataUrl(buffer)})});const result=await response.json();if(!response.ok||!result.ok)throw Error(result.error||'Overlay save failed');log(`SAVED ${current.id}`);setTimeout(()=>startNext().catch(fail),150);
+    }
+    function fail(error){const label=current?current.id:'setup';errors.push(`${label}: ${error.message||error}`);log(`ERROR ${errors[errors.length-1]}`);if(phase==='opening'||phase==='saving'){setTimeout(()=>startNext().catch(fail),150)}else{say('Renderer stopped. See log.');start.disabled=false}}
+    window.addEventListener('message',event=>{
+      if(event.source!==frame.contentWindow)return;
+      if(event.data instanceof ArrayBuffer){if(phase==='saving')saveOverlay(event.data).catch(fail);return}
+      if(typeof event.data!=='string')return;
+      if(event.data.startsWith('RENDER:')){log(event.data);return}
+      if(event.data.startsWith('ERR:render:')){fail(new Error(event.data));return}
+      if(event.data==='done'){
+        if(!ready){ready=true;pp=frame.contentWindow;say(queueLoaded?`Ready to render ${queue.length} real PSDs.`:'Photopea ready; loading PSD queue…');start.disabled=!queueLoaded;log('Photopea ready.');}
+        else if(phase==='opening'){sendRenderScript();}
+      }
+    });
+    start.addEventListener('click',()=>{if(!ready||!queueLoaded)return;start.disabled=true;index=0;errors=[];startNext().catch(fail)});
+    fetch('/api/bootstrap').then(r=>r.json()).then(data=>{queue=Array.isArray(data.queue)?data.queue:(data.queue?.value||[]);queueLoaded=true;start.disabled=!ready;say(ready?`Ready to render ${queue.length} real PSDs.`:`Loaded ${queue.length} real PSDs; waiting for Photopea…`);log(`Loaded ${queue.length} PSD render jobs.`)}).catch(error=>{say('Could not load the real PSD queue.');log(`ERROR queue: ${error.message}`)});
+    frame.src=photopeaUrl();say('Loading Photopea with the project fonts…');
+  </script>
+</body>
+</html>

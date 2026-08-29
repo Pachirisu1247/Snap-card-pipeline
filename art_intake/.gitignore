@@ -1,0 +1,7 @@
+# User-created review decisions and downloaded art stay local.
+data/state.json
+data/real_psd_test_queue.json
+assets/original/*
+!assets/original/.gitkeep
+assets/template_overlays/*
+!assets/template_overlays/.gitkeep
