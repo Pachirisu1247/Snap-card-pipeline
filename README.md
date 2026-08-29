@@ -412,3 +412,29 @@ Recommended:
 -   CSV files tracked for auditability
 
 The pipeline is fully rebuildable from scratch.
+
+------------------------------------------------------------------------
+
+# Art Desk 2 — Artwork Discovery and Framing
+
+`art_intake/Start-ArtDesk.ps1` launches the loopback-only review app for
+finding, ranking, framing, and approving replacement artwork. Art Desk 2 adds:
+
+- local foreground matting and subject-aware automatic crops
+- explicit high / medium / low confidence gates
+- protected Cost, Power, logo, and Rules regions
+- Brave Image Search discovery with local CLIP relevance ranking
+- dimension, aspect-ratio, text-risk, and perceptual-duplicate filtering
+- authentic generated-PSD previews in Photopea with cached slider rerenders
+
+Run it from the repository root:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\art_intake\Start-ArtDesk.ps1
+```
+
+Then open <http://127.0.0.1:5010>. See
+[`art_intake/README.md`](art_intake/README.md) for setup, behavior, and tests.
+
+Final PSD write-back, Photoshop Rules styling, the game board, and counters
+remain deliberately deferred until the artwork-selection workflow is proven.

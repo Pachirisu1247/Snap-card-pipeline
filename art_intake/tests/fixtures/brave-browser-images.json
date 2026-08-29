@@ -1,0 +1,22 @@
+{
+  "results": [
+    {
+      "title": "Havok recovered artwork",
+      "url": "https://github.com/Pachirisu1247/Snap-card-pipeline/blob/main/art_intake/assets/original/havok.jpg",
+      "thumbnail": { "src": "https://raw.githubusercontent.com/Pachirisu1247/Snap-card-pipeline/main/art_intake/assets/original/havok.jpg" },
+      "properties": { "url": "https://raw.githubusercontent.com/Pachirisu1247/Snap-card-pipeline/main/art_intake/assets/original/havok.jpg", "width": 825, "height": 1275 }
+    },
+    {
+      "title": "Headpool recovered artwork",
+      "url": "https://github.com/Pachirisu1247/Snap-card-pipeline/blob/main/art_intake/assets/original/headpool.jpg",
+      "thumbnail": { "src": "https://raw.githubusercontent.com/Pachirisu1247/Snap-card-pipeline/main/art_intake/assets/original/headpool.jpg" },
+      "properties": { "url": "https://raw.githubusercontent.com/Pachirisu1247/Snap-card-pipeline/main/art_intake/assets/original/headpool.jpg", "width": 1328, "height": 2000 }
+    },
+    {
+      "title": "Galactus recovered artwork",
+      "url": "https://github.com/Pachirisu1247/Snap-card-pipeline/blob/main/art_intake/assets/original/galactus-first-steps.jpg",
+      "thumbnail": { "src": "https://raw.githubusercontent.com/Pachirisu1247/Snap-card-pipeline/main/art_intake/assets/original/galactus-first-steps.jpg" },
+      "properties": { "url": "https://raw.githubusercontent.com/Pachirisu1247/Snap-card-pipeline/main/art_intake/assets/original/galactus-first-steps.jpg", "width": 1792, "height": 2006 }
+    }
+  ]
+}

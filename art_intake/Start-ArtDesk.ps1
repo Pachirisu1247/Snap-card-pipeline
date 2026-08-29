@@ -1,19 +1,29 @@
 <#
-Starts the Phase 1 Art Intake and Placement Studio at http://127.0.0.1:5010.
+Starts Art Desk 2 at http://127.0.0.1:5010.
 
-This is deliberately dependency-free: Windows PowerShell hosts the local app,
-so the first review workflow can be tested before installing Photoshop or any
-machine-learning packages.
+The user-facing runtime is deliberately dependency-free: Windows PowerShell
+hosts the loopback-only API and static files. Heavy image analysis runs inside
+the browser, while this process owns durable state, remote-image validation,
+candidate metadata, and the authentic generated PSD/template assets.
 #>
 [CmdletBinding()]
 param(
     [ValidateRange(1024, 65535)]
-    [int]$Port = 5010
+    [int]$Port = 5010,
+
+    # Tests can isolate every mutable file without copying the repository.
+    # Normal launches leave this blank and use art_intake itself.
+    [string]$RuntimeRoot = ''
 )
 
 $ErrorActionPreference = 'Stop'
+# Windows PowerShell 5.1 otherwise negotiates obsolete TLS defaults against
+# modern image CDNs. Keep any OS-enabled protocols and explicitly add TLS 1.2.
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
 $AppRoot = Split-Path -Parent $PSCommandPath
+if ([string]::IsNullOrWhiteSpace($RuntimeRoot)) { $RuntimeRoot = $AppRoot }
+$RuntimeRoot = [IO.Path]::GetFullPath($RuntimeRoot)
 $ProjectRoot = Split-Path -Parent $AppRoot
 $CardsCsv = Join-Path $ProjectRoot 'photopea_batch\snap_cards.msz_latest.csv'
 $TemplatePsd = Join-Path $ProjectRoot 'photopea_batch\AgathaNew.psd'
@@ -21,11 +31,17 @@ $CardPsdDir = Join-Path $ProjectRoot 'photopea_batch\output_psd_calibrated_logo'
 $FontsDir = Join-Path $ProjectRoot 'Fonts'
 $HtmlPath = Join-Path $AppRoot 'art_desk.html'
 $RendererPath = Join-Path $AppRoot 'render_real_psd_overlays.html'
-$DataDir = Join-Path $AppRoot 'data'
-$AssetsDir = Join-Path $AppRoot 'assets\original'
+$SecureFetchPath = Join-Path $AppRoot 'secure_fetch.py'
+$StaticDir = Join-Path $AppRoot 'static'
+$DataDir = Join-Path $RuntimeRoot 'data'
+$AssetsDir = Join-Path $RuntimeRoot 'assets\original'
 $OverlayDir = Join-Path $AppRoot 'assets\template_overlays'
+$CandidateDataDir = Join-Path $DataDir 'candidates'
+$CandidateCacheDir = Join-Path $RuntimeRoot 'cache\candidates'
 $StatePath = Join-Path $DataDir 'state.json'
 $QueuePath = Join-Path $DataDir 'real_psd_test_queue.json'
+$SettingsPath = Join-Path $DataDir 'settings.local.json'
+$Script:QueueIds = @{}
 
 function Ensure-Directory([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path)) {
@@ -33,14 +49,56 @@ function Ensure-Directory([string]$Path) {
     }
 }
 
+function Save-JsonAtomic([string]$Path, $Value, [int]$Depth = 20) {
+    Ensure-Directory (Split-Path -Parent $Path)
+    $temporary = "$Path.$([Guid]::NewGuid().ToString('N')).tmp"
+    # -InputObject preserves top-level arrays on Windows PowerShell 5.1. The
+    # pipeline form serializes them as an unexpected {"value": [...]} wrapper.
+    # ConvertFrom-Json in Windows PowerShell 5.1 can attach a wrapper adapter
+    # to root arrays. Re-enumerating produces an ordinary Object[] that keeps
+    # its JSON array shape.
+    $serializable = if ($Value -is [Array]) { @($Value | ForEach-Object { $_ }) } else { $Value }
+    $json = ConvertTo-Json -InputObject $serializable -Depth $Depth
+    [IO.File]::WriteAllText($temporary, $json, [Text.UTF8Encoding]::new($false))
+    try {
+        if (Test-Path -LiteralPath $Path) {
+            try { [IO.File]::Replace($temporary, $Path, $null) }
+            catch { Move-Item -LiteralPath $temporary -Destination $Path -Force }
+        } else {
+            Move-Item -LiteralPath $temporary -Destination $Path
+        }
+    } finally {
+        if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force }
+    }
+}
+
+function Save-BytesAtomic([string]$Path, [byte[]]$Bytes) {
+    Ensure-Directory (Split-Path -Parent $Path)
+    $temporary = "$Path.$([Guid]::NewGuid().ToString('N')).tmp"
+    [IO.File]::WriteAllBytes($temporary, $Bytes)
+    try { Move-Item -LiteralPath $temporary -Destination $Path -Force }
+    finally { if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force } }
+}
+
+function Read-GzipBytes([string]$Path) {
+    $source = [IO.File]::OpenRead($Path)
+    try {
+        $gzip = [IO.Compression.GZipStream]::new($source, [IO.Compression.CompressionMode]::Decompress)
+        try {
+            $memory = [IO.MemoryStream]::new()
+            try {
+                $gzip.CopyTo($memory)
+                return ,$memory.ToArray()
+            } finally { $memory.Dispose() }
+        } finally { $gzip.Dispose() }
+    } finally { $source.Dispose() }
+}
+
 function Get-TemplateSize {
     if (-not (Test-Path -LiteralPath $TemplatePsd)) {
         return [pscustomobject]@{ width = 1700; height = 2400; source = 'fallback' }
     }
-
-    # PSD header: signature (4), version (2), reserved (6), channels (2),
-    # height (4), width (4). We only need the document aspect ratio here.
-    $bytes = [System.IO.File]::ReadAllBytes($TemplatePsd)
+    $bytes = [IO.File]::ReadAllBytes($TemplatePsd)
     if ($bytes.Length -lt 26 -or [Text.Encoding]::ASCII.GetString($bytes, 0, 4) -ne '8BPS') {
         return [pscustomobject]@{ width = 1700; height = 2400; source = 'fallback' }
     }
@@ -53,77 +111,334 @@ function Get-TestQueue {
     if (Test-Path -LiteralPath $QueuePath) {
         return @(Get-Content -LiteralPath $QueuePath -Raw | ConvertFrom-Json)
     }
-    if (-not (Test-Path -LiteralPath $CardsCsv)) {
-        throw "Card CSV not found: $CardsCsv"
+    # Isolated test roots can reuse the tracked queue without mutating it.
+    $trackedQueue = Join-Path $AppRoot 'data\real_psd_test_queue.json'
+    if ($RuntimeRoot -ne $AppRoot -and (Test-Path -LiteralPath $trackedQueue)) {
+        $loaded = @(Get-Content -LiteralPath $trackedQueue -Raw | ConvertFrom-Json)
+        Save-JsonAtomic $QueuePath $loaded 6
+        return $loaded
     }
+    if (-not (Test-Path -LiteralPath $CardsCsv)) { throw "Card CSV not found: $CardsCsv" }
+    if (-not (Test-Path -LiteralPath $CardPsdDir)) { throw "Generated PSD directory not found: $CardPsdDir" }
 
-    if (-not (Test-Path -LiteralPath $CardPsdDir)) {
-        throw "Generated PSD directory not found: $CardPsdDir"
-    }
-
-    # Only use cards with an actual completed PSD in the repository. The Art
-    # Desk preview must never fall back to a fabricated CSS version of a card.
-    $cards = @(Import-Csv -LiteralPath $CardsCsv)
     $cardById = @{}
-    foreach ($card in $cards) { $cardById[[string]$card.id] = $card }
+    foreach ($card in @(Import-Csv -LiteralPath $CardsCsv)) { $cardById[[string]$card.id] = $card }
     $cards = @(Get-ChildItem -LiteralPath $CardPsdDir -Filter '*.psd' | ForEach-Object {
         if ($cardById.ContainsKey($_.BaseName)) { $cardById[$_.BaseName] }
     })
     if ($cards.Count -lt 48) { throw "Expected at least 48 mapped generated PSDs, found $($cards.Count)." }
 
-    # Stable randomized 48-card sample, drawn only from the completed PSD set.
-    $random = [System.Random]::new(20260803)
+    $random = [Random]::new(20260803)
     for ($i = $cards.Count - 1; $i -gt 0; $i--) {
         $j = $random.Next($i + 1)
-        $swap = $cards[$i]
-        $cards[$i] = $cards[$j]
-        $cards[$j] = $swap
+        $swap = $cards[$i]; $cards[$i] = $cards[$j]; $cards[$j] = $swap
     }
     $queue = @($cards | Select-Object -First 48 | ForEach-Object {
-        [pscustomobject]@{
-            id = $_.id
-            cost = [string]$_.cost
-            power = [string]$_.power
-            rules = [string]$_.rules
-        }
+        [pscustomobject]@{ id = $_.id; cost = [string]$_.cost; power = [string]$_.power; rules = [string]$_.rules }
     })
-    $queue | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $QueuePath -Encoding UTF8
+    Save-JsonAtomic $QueuePath $queue 6
     return $queue
 }
 
 function Get-State {
     if (-not (Test-Path -LiteralPath $StatePath)) {
-        return [pscustomobject]@{ version = 1; cards = [pscustomobject]@{} }
+        return [pscustomobject]@{ version = 2; cards = [pscustomobject]@{} }
     }
     $state = Get-Content -LiteralPath $StatePath -Raw | ConvertFrom-Json
-    if ($null -eq $state.cards) {
-        $state | Add-Member -Force -NotePropertyName cards -NotePropertyValue ([pscustomobject]@{})
-    }
+    if ($null -eq $state.cards) { $state | Add-Member -Force NoteProperty cards ([pscustomobject]@{}) }
+    $state.version = 2
     return $state
 }
 
 function Save-State($State) {
-    $State | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $StatePath -Encoding UTF8
+    $State.version = 2
+    Save-JsonAtomic $StatePath $State 24
+}
+
+function Get-CardRecord($State, [string]$CardId) {
+    $property = $State.cards.PSObject.Properties[$CardId]
+    if ($null -eq $property) { return $null }
+    return $property.Value
+}
+
+function Set-CardRecord($State, [string]$CardId, $Record) {
+    $State.cards | Add-Member -Force -NotePropertyName $CardId -NotePropertyValue $Record
+}
+
+function Assert-CardId([string]$CardId) {
+    if ($CardId -notmatch '^[a-z0-9-]+$' -or -not $Script:QueueIds.ContainsKey($CardId)) {
+        throw "Unknown or invalid card id: $CardId"
+    }
+}
+
+function New-DefaultCrop([string]$Mode = 'manual') {
+    return [pscustomobject]@{ scale = 1; pan_x = 0; pan_y = 0; mode = $Mode; analysis_version = 2 }
+}
+
+function Get-Settings {
+    if (-not (Test-Path -LiteralPath $SettingsPath)) { return [pscustomobject]@{} }
+    try { return Get-Content -LiteralPath $SettingsPath -Raw | ConvertFrom-Json }
+    catch { throw 'The local search settings file is not valid JSON.' }
+}
+
+function Get-BraveApiKey {
+    if (-not [string]::IsNullOrWhiteSpace([string]$env:ART_DESK_BRAVE_API_KEY)) {
+        return [string]$env:ART_DESK_BRAVE_API_KEY
+    }
+    $settings = Get-Settings
+    return [string]$settings.brave_api_key
+}
+
+function Find-PythonRuntime {
+    $candidates = [Collections.Generic.List[string]]::new()
+    if (-not [string]::IsNullOrWhiteSpace([string]$env:USERPROFILE)) {
+        $candidates.Add((Join-Path $env:USERPROFILE '.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe'))
+    }
+    foreach ($name in @('python3', 'python')) {
+        $command = Get-Command $name -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($command -and -not [string]::IsNullOrWhiteSpace([string]$command.Source)) { $candidates.Add([string]$command.Source) }
+    }
+    foreach ($candidate in $candidates) {
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { return [IO.Path]::GetFullPath($candidate) }
+    }
+    return $null
+}
+
+function Invoke-SecureFetchBytes([string]$Url, [hashtable]$Headers, [long]$MaximumBytes) {
+    if ([string]::IsNullOrWhiteSpace([string]$Script:PythonPath)) { return $null }
+    # Fail closed in both processes: the server checks before the helper checks
+    # every DNS answer and redirect independently.
+    Get-SafeRemoteUri $Url | Out-Null
+    $networkDir = Join-Path $RuntimeRoot 'cache\network'; Ensure-Directory $networkDir
+    $token = [Guid]::NewGuid().ToString('N')
+    $requestPath = Join-Path $networkDir "$token.request.json"
+    $outputPath = Join-Path $networkDir "$token.response.bin"
+    try {
+        Save-JsonAtomic $requestPath ([pscustomobject]@{ url = $Url; output = $outputPath; max_bytes = $MaximumBytes; headers = $Headers }) 6
+        $info = [Diagnostics.ProcessStartInfo]::new()
+        $info.FileName = $Script:PythonPath
+        $info.Arguments = '"' + $SecureFetchPath + '" "' + $requestPath + '"'
+        $info.UseShellExecute = $false; $info.CreateNoWindow = $true
+        $info.RedirectStandardOutput = $true; $info.RedirectStandardError = $true
+        $process = [Diagnostics.Process]::Start($info)
+        if (-not $process.WaitForExit(40000)) {
+            try { $process.Kill() } catch {}
+            throw 'Secure HTTPS helper timed out.'
+        }
+        $stdout = $process.StandardOutput.ReadToEnd(); $stderr = $process.StandardError.ReadToEnd()
+        if ($process.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $outputPath)) {
+            $message = if ([string]::IsNullOrWhiteSpace($stderr)) { 'Secure HTTPS helper failed.' } else { $stderr.Trim() }
+            throw $message
+        }
+        $metadata = $stdout | ConvertFrom-Json
+        return [pscustomobject]@{ bytes = [IO.File]::ReadAllBytes($outputPath); final_url = [string]$metadata.final_url; content_type = [string]$metadata.content_type }
+    } finally {
+        if (Test-Path -LiteralPath $requestPath) { Remove-Item -LiteralPath $requestPath -Force }
+        if (Test-Path -LiteralPath $outputPath) { Remove-Item -LiteralPath $outputPath -Force }
+    }
+}
+
+function Get-CandidateFile([string]$CardId) { return Join-Path $CandidateDataDir "$CardId.json" }
+
+function Get-CandidateSet([string]$CardId) {
+    Assert-CardId $CardId
+    $path = Get-CandidateFile $CardId
+    if (-not (Test-Path -LiteralPath $path)) {
+        return [pscustomobject]@{ version = 1; card_id = $CardId; query = ''; updated_at = $null; candidates = @() }
+    }
+    return Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+}
+
+function Get-Candidate([string]$CardId, [string]$CandidateId) {
+    if ($CandidateId -notmatch '^[a-f0-9]{16,64}$') { throw 'Invalid candidate id.' }
+    $set = Get-CandidateSet $CardId
+    $candidate = @($set.candidates | Where-Object { [string]$_.id -eq $CandidateId } | Select-Object -First 1)
+    if ($candidate.Count -eq 0) { throw 'Candidate is no longer in this card search.' }
+    return $candidate[0]
+}
+
+function Get-StableId([string]$Value) {
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { $hash = $sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($Value)) }
+    finally { $sha.Dispose() }
+    return -join ($hash[0..11] | ForEach-Object { $_.ToString('x2') })
+}
+
+function Test-PrivateAddress([Net.IPAddress]$Address) {
+    if ([Net.IPAddress]::IsLoopback($Address)) { return $true }
+    $bytes = $Address.GetAddressBytes()
+    if ($Address.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetwork) {
+        return ($bytes[0] -eq 10) -or
+            ($bytes[0] -eq 127) -or
+            ($bytes[0] -eq 169 -and $bytes[1] -eq 254) -or
+            ($bytes[0] -eq 172 -and $bytes[1] -ge 16 -and $bytes[1] -le 31) -or
+            ($bytes[0] -eq 192 -and $bytes[1] -eq 168) -or
+            ($bytes[0] -eq 0)
+    }
+    if ($Address.IsIPv4MappedToIPv6) { return Test-PrivateAddress $Address.MapToIPv4() }
+    return ($Address.Equals([Net.IPAddress]::IPv6None)) -or
+        ($Address.Equals([Net.IPAddress]::IPv6Loopback)) -or
+        (($bytes[0] -band 0xfe) -eq 0xfc) -or
+        ($bytes[0] -eq 0xfe -and (($bytes[1] -band 0xc0) -eq 0x80))
+}
+
+function Get-SafeRemoteUri([string]$Value) {
+    $uri = $null
+    if (-not [Uri]::TryCreate($Value, [UriKind]::Absolute, [ref]$uri) -or $uri.Scheme -notin @('http', 'https')) {
+        throw 'Use an absolute http or https image URL.'
+    }
+    if ([string]::IsNullOrWhiteSpace($uri.Host) -or $uri.UserInfo) { throw 'The image URL host is invalid.' }
+    $addresses = @([Net.Dns]::GetHostAddresses($uri.DnsSafeHost))
+    if ($addresses.Count -eq 0 -or @($addresses | Where-Object { Test-PrivateAddress $_ }).Count -gt 0) {
+        throw 'Local and private-network image URLs are not allowed.'
+    }
+    return $uri
+}
+
+function Get-ImageMime([byte[]]$Bytes) {
+    if ($Bytes.Length -ge 3 -and $Bytes[0] -eq 0xff -and $Bytes[1] -eq 0xd8 -and $Bytes[2] -eq 0xff) { return 'image/jpeg' }
+    if ($Bytes.Length -ge 8 -and (@($Bytes[0..7]) -join ',') -eq '137,80,78,71,13,10,26,10') { return 'image/png' }
+    if ($Bytes.Length -ge 6) {
+        $start = [Text.Encoding]::ASCII.GetString($Bytes, 0, 6)
+        if ($start -in @('GIF87a', 'GIF89a')) { return 'image/gif' }
+    }
+    if ($Bytes.Length -ge 12 -and [Text.Encoding]::ASCII.GetString($Bytes, 0, 4) -eq 'RIFF' -and [Text.Encoding]::ASCII.GetString($Bytes, 8, 4) -eq 'WEBP') { return 'image/webp' }
+    if ($Bytes.Length -ge 16 -and [Text.Encoding]::ASCII.GetString($Bytes, 4, 4) -eq 'ftyp') {
+        $box = [Text.Encoding]::ASCII.GetString($Bytes, 8, [Math]::Min(24, $Bytes.Length - 8))
+        if ($box -match 'avif|avis') { return 'image/avif' }
+    }
+    throw 'The remote file is not a supported raster image.'
+}
+
+function Get-ImageExtension([string]$Mime) {
+    switch ($Mime.ToLowerInvariant()) {
+        'image/jpeg' { '.jpg' }
+        'image/png' { '.png' }
+        'image/webp' { '.webp' }
+        'image/gif' { '.gif' }
+        'image/avif' { '.avif' }
+        default { throw "Unsupported image type: $Mime" }
+    }
+}
+
+function Invoke-ImageDownload([string]$Url, [long]$MaximumBytes = 25MB) {
+    if (-not [string]::IsNullOrWhiteSpace([string]$Script:PythonPath)) {
+        $fetched = Invoke-SecureFetchBytes $Url @{
+            Accept = 'image/avif,image/webp,image/png,image/jpeg,image/gif;q=0.8,*/*;q=0.2'
+            'User-Agent' = 'MarvelSnapArtDesk/2.0 (local personal review tool)'
+        } $MaximumBytes
+        $mime = Get-ImageMime $fetched.bytes
+        return [pscustomobject]@{ bytes = $fetched.bytes; mime = $mime; final_url = $fetched.final_url }
+    }
+    $current = Get-SafeRemoteUri $Url
+    for ($redirect = 0; $redirect -le 5; $redirect++) {
+        $request = [Net.HttpWebRequest]::Create($current)
+        $request.Method = 'GET'; $request.Timeout = 20000; $request.ReadWriteTimeout = 20000
+        $request.AllowAutoRedirect = $false
+        $request.UserAgent = 'MarvelSnapArtDesk/2.0 (local personal review tool)'
+        $request.Accept = 'image/avif,image/webp,image/png,image/jpeg,image/gif;q=0.8,*/*;q=0.2'
+        $response = $request.GetResponse()
+        try {
+            $status = [int]$response.StatusCode
+            if ($status -ge 300 -and $status -lt 400) {
+                if ($redirect -eq 5 -or [string]::IsNullOrWhiteSpace([string]$response.Headers['Location'])) { throw 'The image URL redirected too many times.' }
+                $current = Get-SafeRemoteUri ([Uri]::new($current, [string]$response.Headers['Location']).AbsoluteUri)
+                continue
+            }
+            if ($status -lt 200 -or $status -ge 300) { throw "The image server returned HTTP $status." }
+            if ($response.ContentLength -gt $MaximumBytes) { throw "The image is larger than $([Math]::Round($MaximumBytes / 1MB)) MB." }
+            $input = $response.GetResponseStream(); $memory = [IO.MemoryStream]::new()
+            try {
+                $buffer = [byte[]]::new(81920)
+                while (($read = $input.Read($buffer, 0, $buffer.Length)) -gt 0) {
+                    $memory.Write($buffer, 0, $read)
+                    if ($memory.Length -gt $MaximumBytes) { throw "The image is larger than $([Math]::Round($MaximumBytes / 1MB)) MB." }
+                }
+                $bytes = $memory.ToArray()
+            } finally { $memory.Dispose(); $input.Dispose() }
+            $mime = Get-ImageMime $bytes
+            return [pscustomobject]@{ bytes = $bytes; mime = $mime; final_url = $current.AbsoluteUri }
+        } finally { $response.Close() }
+    }
+    throw 'The image could not be downloaded.'
+}
+
+function Get-PropertyValue($Object, [string[]]$Paths) {
+    foreach ($path in $Paths) {
+        $value = $Object
+        foreach ($segment in ($path -split '\.')) {
+            if ($null -eq $value) { break }
+            $property = $value.PSObject.Properties[$segment]
+            if ($null -eq $property) { $value = $null; break }
+            $value = $property.Value
+        }
+        if ($null -ne $value -and -not [string]::IsNullOrWhiteSpace([string]$value)) { return $value }
+    }
+    return $null
+}
+
+function ConvertFrom-BraveImageResults($Response) {
+    $results = @($Response.results)
+    $normalized = [Collections.Generic.List[object]]::new()
+    for ($index = 0; $index -lt $results.Count; $index++) {
+        $item = $results[$index]
+        $original = [string](Get-PropertyValue $item @('properties.url', 'original', 'image_url'))
+        $sourcePage = [string](Get-PropertyValue $item @('url', 'source', 'source_url'))
+        $thumbnail = [string](Get-PropertyValue $item @('thumbnail.src', 'thumbnail.url', 'thumbnail'))
+        if ([string]::IsNullOrWhiteSpace($original)) { continue }
+        if ([string]::IsNullOrWhiteSpace($thumbnail)) { $thumbnail = $original }
+        if ([string]::IsNullOrWhiteSpace($sourcePage)) { $sourcePage = $original }
+        if ($original -notmatch '^https?://' -or $thumbnail -notmatch '^https?://') { continue }
+        $widthValue = Get-PropertyValue $item @('properties.width', 'width')
+        $heightValue = Get-PropertyValue $item @('properties.height', 'height')
+        $width = 0; $height = 0
+        [int]::TryParse([string]$widthValue, [ref]$width) | Out-Null
+        [int]::TryParse([string]$heightValue, [ref]$height) | Out-Null
+        $normalized.Add([pscustomobject]@{
+            id = Get-StableId $original; title = [string](Get-PropertyValue $item @('title'))
+            original_url = $original; thumbnail_url = $thumbnail; source_page_url = $sourcePage
+            width = $width; height = $height; provider = 'brave-images-v1'; provider_rank = $index + 1
+        })
+    }
+    return @($normalized)
+}
+
+function Invoke-BraveImageSearch([string]$Query, [int]$Count) {
+    $mock = [string]$env:ART_DESK_MOCK_SEARCH_RESPONSE
+    if (-not [string]::IsNullOrWhiteSpace($mock)) {
+        if (-not (Test-Path -LiteralPath $mock)) { throw 'Configured mock search response is missing.' }
+        return Get-Content -LiteralPath $mock -Raw | ConvertFrom-Json
+    }
+    $key = Get-BraveApiKey
+    if ([string]::IsNullOrWhiteSpace($key)) { throw 'Configure a Brave Image Search API key first.' }
+    $encoded = [Uri]::EscapeDataString($Query)
+    $uri = "https://api.search.brave.com/res/v1/images/search?q=$encoded&count=$Count&safesearch=strict&country=US&search_lang=en"
+    if (-not [string]::IsNullOrWhiteSpace([string]$Script:PythonPath)) {
+        $fetched = Invoke-SecureFetchBytes $uri @{ Accept = 'application/json'; 'X-Subscription-Token' = $key; 'User-Agent' = 'MarvelSnapArtDesk/2.0' } 8MB
+        return [Text.Encoding]::UTF8.GetString($fetched.bytes) | ConvertFrom-Json
+    }
+    $request = [Net.HttpWebRequest]::Create($uri)
+    $request.Method = 'GET'; $request.Timeout = 30000; $request.ReadWriteTimeout = 30000
+    $request.UserAgent = 'MarvelSnapArtDesk/2.0'; $request.Accept = 'application/json'
+    $request.Headers.Add('X-Subscription-Token', $key)
+    $response = $request.GetResponse()
+    try {
+        $reader = [IO.StreamReader]::new($response.GetResponseStream(), [Text.Encoding]::UTF8)
+        try { return $reader.ReadToEnd() | ConvertFrom-Json }
+        finally { $reader.Dispose() }
+    } finally { $response.Close() }
 }
 
 function Read-HttpRequest($Stream) {
-    # HttpListener is unavailable in the sandboxed PowerShell host. This tiny
-    # loopback-only HTTP reader gives Phase 1 a zero-dependency local server.
-    $header = [System.Collections.Generic.List[byte]]::new()
-    $tail = [System.Collections.Generic.Queue[byte]]::new()
+    $header = [Collections.Generic.List[byte]]::new(); $tail = [Collections.Generic.Queue[byte]]::new()
     while ($true) {
-        $next = $Stream.ReadByte()
-        if ($next -lt 0) { throw 'Connection closed before request headers.' }
-        $byte = [byte]$next
-        $header.Add($byte)
-        $tail.Enqueue($byte)
+        $next = $Stream.ReadByte(); if ($next -lt 0) { throw 'Connection closed before request headers.' }
+        $byte = [byte]$next; $header.Add($byte); $tail.Enqueue($byte)
         if ($tail.Count -gt 4) { $tail.Dequeue() | Out-Null }
         if ($tail.Count -eq 4 -and (@($tail) -join ',') -eq '13,10,13,10') { break }
         if ($header.Count -gt 65536) { throw 'Request headers were too large.' }
     }
-    $headerText = [Text.Encoding]::ASCII.GetString($header.ToArray())
-    $lines = $headerText -split "`r`n"
-    $requestLine = $lines[0] -split ' '
+    $lines = [Text.Encoding]::ASCII.GetString($header.ToArray()) -split "`r`n"; $requestLine = $lines[0] -split ' '
     if ($requestLine.Count -lt 2) { throw 'Malformed HTTP request line.' }
     $headers = @{}
     foreach ($line in $lines | Select-Object -Skip 1) {
@@ -131,29 +446,30 @@ function Read-HttpRequest($Stream) {
         if ($separator -gt 0) { $headers[$line.Substring(0, $separator).Trim().ToLowerInvariant()] = $line.Substring($separator + 1).Trim() }
     }
     $contentLength = if ($headers.ContainsKey('content-length')) { [int]$headers['content-length'] } else { 0 }
-    # A 25 MB binary image becomes roughly 33 MB after browser base64 encoding.
     if ($contentLength -gt 40MB) { throw 'Request body is too large.' }
-    $body = [byte[]]::new($contentLength)
-    $offset = 0
+    $body = [byte[]]::new($contentLength); $offset = 0
     while ($offset -lt $contentLength) {
-        $read = $Stream.Read($body, $offset, $contentLength - $offset)
-        if ($read -le 0) { throw 'Connection closed before request body.' }
-        $offset += $read
+        $read = $Stream.Read($body, $offset, $contentLength - $offset); if ($read -le 0) { throw 'Connection closed before request body.' }; $offset += $read
     }
-    return [pscustomobject]@{ Method = $requestLine[0].ToUpperInvariant(); Path = ([Uri]::UnescapeDataString(($requestLine[1] -split '\?')[0])); Headers = $headers; Body = $body }
+    return [pscustomobject]@{
+        Method = $requestLine[0].ToUpperInvariant(); Path = [Uri]::UnescapeDataString(([string]$requestLine[1] -split '\?')[0])
+        Headers = $headers; Body = $body
+    }
 }
 
 function Write-Response($Stream, [int]$StatusCode, [string]$ContentType, [byte[]]$Bytes) {
-    $reason = switch ($StatusCode) { 200 { 'OK' } 400 { 'Bad Request' } 404 { 'Not Found' } default { 'Error' } }
-    $header = "HTTP/1.1 $StatusCode $reason`r`nContent-Type: $ContentType`r`nContent-Length: $($Bytes.Length)`r`nCache-Control: no-store`r`nAccess-Control-Allow-Origin: *`r`nConnection: close`r`n`r`n"
-    $headerBytes = [Text.Encoding]::ASCII.GetBytes($header)
-    $Stream.Write($headerBytes, 0, $headerBytes.Length)
-    $Stream.Write($Bytes, 0, $Bytes.Length)
-    $Stream.Flush()
+    $reason = switch ($StatusCode) {
+        200 { 'OK' } 400 { 'Bad Request' } 404 { 'Not Found' } 409 { 'Conflict' }
+        413 { 'Payload Too Large' } 424 { 'Failed Dependency' } 429 { 'Too Many Requests' }
+        500 { 'Internal Server Error' } default { 'Error' }
+    }
+    $header = "HTTP/1.1 $StatusCode $reason`r`nContent-Type: $ContentType`r`nContent-Length: $($Bytes.Length)`r`nCache-Control: no-store`r`nX-Content-Type-Options: nosniff`r`nConnection: close`r`n`r`n"
+    $headerBytes = [Text.Encoding]::ASCII.GetBytes($header); $Stream.Write($headerBytes, 0, $headerBytes.Length)
+    $Stream.Write($Bytes, 0, $Bytes.Length); $Stream.Flush()
 }
 
 function Write-Json($Stream, $Value, [int]$StatusCode = 200) {
-    $json = $Value | ConvertTo-Json -Depth 12 -Compress
+    $json = ConvertTo-Json -InputObject $Value -Depth 24 -Compress
     Write-Response $Stream $StatusCode 'application/json; charset=utf-8' ([Text.Encoding]::UTF8.GetBytes($json))
 }
 
@@ -167,270 +483,205 @@ function Read-JsonBody($Request) {
     return $body | ConvertFrom-Json
 }
 
-function Get-CardRecord($State, [string]$CardId) {
-    $property = $State.cards.PSObject.Properties[$CardId]
-    if ($null -eq $property) { return $null }
-    return $property.Value
-}
-
-function Set-CardRecord($State, [string]$CardId, $Record) {
-    $State.cards | Add-Member -Force -NotePropertyName $CardId -NotePropertyValue $Record
-}
-
-function Get-ImageExtension([string]$Mime) {
-    switch ($Mime.ToLowerInvariant()) {
-        'image/jpeg' { return '.jpg' }
-        'image/png' { return '.png' }
-        'image/webp' { return '.webp' }
-        'image/gif' { return '.gif' }
-        'image/avif' { return '.avif' }
-        default { throw "Unsupported image type: $Mime" }
+function Get-StaticContentType([string]$Path) {
+    switch ([IO.Path]::GetExtension($Path).ToLowerInvariant()) {
+        '.js' { 'text/javascript; charset=utf-8' } '.mjs' { 'text/javascript; charset=utf-8' }
+        '.css' { 'text/css; charset=utf-8' } '.wasm' { 'application/wasm' }
+        default { 'application/octet-stream' }
     }
 }
 
 Ensure-Directory $DataDir
 Ensure-Directory $AssetsDir
 Ensure-Directory $OverlayDir
-$queue = Get-TestQueue
+Ensure-Directory $CandidateDataDir
+Ensure-Directory $CandidateCacheDir
+$Script:PythonPath = Find-PythonRuntime
+$queue = @(Get-TestQueue | ForEach-Object { $_ })
+foreach ($item in $queue) { $Script:QueueIds[[string]$item.id] = $true }
 $template = Get-TemplateSize
 
-$listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $Port)
+$listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, $Port)
 $listener.Start()
-
 Write-Host ''
-Write-Host "Art Desk is running at http://127.0.0.1:$Port/" -ForegroundColor Green
-Write-Host "Phase 1 test queue: $($queue.Count) randomized cards"
-Write-Host 'Press Ctrl+C to stop the server.'
+Write-Host "Art Desk 2 is running at http://127.0.0.1:$Port/" -ForegroundColor Green
+Write-Host "$($queue.Count)-card real-PSD review queue; Ctrl+C stops the server."
+Write-Host "HTTPS backend: $(if ($Script:PythonPath) { 'Python/OpenSSL' } else { 'Windows native' })"
 
 try {
     while ($true) {
-        $client = $listener.AcceptTcpClient()
-        # Browsers may open an idle speculative connection before sending a
-        # request. Without a timeout, that one socket would freeze this small
-        # single-process Phase 1 server and make localhost appear dead.
-        $client.ReceiveTimeout = 2000
-        $client.SendTimeout = 5000
-        $stream = $client.GetStream()
+        $client = $listener.AcceptTcpClient(); $client.ReceiveTimeout = 2500; $client.SendTimeout = 10000; $stream = $client.GetStream()
         try {
-            $request = Read-HttpRequest $stream
-            $path = $request.Path
+            $request = Read-HttpRequest $stream; $path = $request.Path
 
             if ($request.Method -eq 'GET' -and $path -eq '/') {
-                Write-Response $stream 200 'text/html; charset=utf-8' ([System.IO.File]::ReadAllBytes($HtmlPath))
-                continue
+                Write-Response $stream 200 'text/html; charset=utf-8' ([IO.File]::ReadAllBytes($HtmlPath)); continue
             }
-
+            if ($request.Method -eq 'GET' -and $path.StartsWith('/static/')) {
+                $relative = $path.Substring(8)
+                if ($relative -notmatch '^[A-Za-z0-9/_.-]+\.(js|mjs|css|wasm)$') { throw 'Invalid static asset request.' }
+                $file = [IO.Path]::GetFullPath((Join-Path $StaticDir ($relative -replace '/', '\')))
+                $staticRoot = [IO.Path]::GetFullPath($StaticDir).TrimEnd('\') + '\'
+                if (-not $file.StartsWith($staticRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'Invalid static asset path.' }
+                if (Test-Path -LiteralPath $file) {
+                    $bytes = [IO.File]::ReadAllBytes($file)
+                } elseif (Test-Path -LiteralPath "$file.gz") {
+                    $bytes = Read-GzipBytes "$file.gz"
+                } else {
+                    Write-Text $stream 404 'Static asset is missing.'; continue
+                }
+                Write-Response $stream 200 (Get-StaticContentType $file) $bytes; continue
+            }
             if ($request.Method -eq 'GET' -and $path -eq '/render-real-psd-overlays') {
-                Write-Response $stream 200 'text/html; charset=utf-8' ([System.IO.File]::ReadAllBytes($RendererPath))
-                continue
+                Write-Response $stream 200 'text/html; charset=utf-8' ([IO.File]::ReadAllBytes($RendererPath)); continue
             }
-
             if ($request.Method -eq 'GET' -and $path.StartsWith('/font/')) {
-                $fontName = $path.Substring(6)
-                if ($fontName -notmatch '^[A-Za-z0-9 ._-]+\.(otf|ttf)$') { throw 'Invalid font request.' }
+                $fontName = $path.Substring(6); if ($fontName -notmatch '^[A-Za-z0-9 ._-]+\.(otf|ttf)$') { throw 'Invalid font request.' }
                 $fontPath = Join-Path $FontsDir $fontName
                 if (-not (Test-Path -LiteralPath $fontPath)) { Write-Text $stream 404 'Font is missing.'; continue }
                 $contentType = if ($fontName.ToLowerInvariant().EndsWith('.otf')) { 'font/otf' } else { 'font/ttf' }
-                Write-Response $stream 200 $contentType ([System.IO.File]::ReadAllBytes($fontPath))
-                continue
+                Write-Response $stream 200 $contentType ([IO.File]::ReadAllBytes($fontPath)); continue
             }
-
             if ($request.Method -eq 'GET' -and $path -eq '/api/bootstrap') {
                 $state = Get-State
+                $searchConfigured = -not [string]::IsNullOrWhiteSpace((Get-BraveApiKey)) -or -not [string]::IsNullOrWhiteSpace([string]$env:ART_DESK_MOCK_SEARCH_RESPONSE)
                 Write-Json $stream ([pscustomobject]@{
-                    queue = $queue
-                    state = $state.cards
-                    template = $template
-                    queue_kind = 'Phase 1 randomized test queue from real generated PSDs'
-                })
-                continue
-            }
-
-            if ($request.Method -eq 'GET' -and $path.StartsWith('/psd/')) {
-                $cardId = $path.Substring(5)
-                if ($cardId -notmatch '^[a-z0-9-]+$' -or $queue.id -notcontains $cardId) { throw 'Invalid PSD request.' }
-                $psdPath = Join-Path $CardPsdDir "$cardId.psd"
-                if (-not (Test-Path -LiteralPath $psdPath)) { Write-Text $stream 404 'Generated PSD is missing.'; continue }
-                Write-Response $stream 200 'image/vnd.adobe.photoshop' ([System.IO.File]::ReadAllBytes($psdPath))
-                continue
-            }
-
-            if ($request.Method -eq 'POST' -and $path -eq '/api/save-template-overlay') {
-                $payload = Read-JsonBody $request
-                $cardId = [string]$payload.card_id
-                if ($queue.id -notcontains $cardId) { throw "Unknown card id: $cardId" }
-                $dataUrl = [string]$payload.image_data_url
-                $match = [regex]::Match($dataUrl, '^data:image/png;base64,([A-Za-z0-9+/=\r\n]+)$')
-                if (-not $match.Success) { throw 'Template overlay must be a PNG data URL.' }
-                $bytes = [Convert]::FromBase64String($match.Groups[1].Value)
-                if ($bytes.Length -gt 12MB) { throw 'Template overlay was unexpectedly large.' }
-                [System.IO.File]::WriteAllBytes((Join-Path $OverlayDir "$cardId.png"), $bytes)
-                Write-Json $stream ([pscustomobject]@{ ok = $true; overlay_url = "/template-overlay/$cardId" })
-                continue
-            }
-
-            if ($request.Method -eq 'GET' -and $path.StartsWith('/template-overlay/')) {
-                $cardId = $path.Substring(18)
-                if ($cardId -notmatch '^[a-z0-9-]+$') { throw 'Invalid template overlay request.' }
-                $overlayPath = Join-Path $OverlayDir "$cardId.png"
-                if (-not (Test-Path -LiteralPath $overlayPath)) { Write-Text $stream 404 'Template overlay has not been rendered yet.'; continue }
-                Write-Response $stream 200 'image/png' ([System.IO.File]::ReadAllBytes($overlayPath))
-                continue
-            }
-
-            if ($request.Method -eq 'POST' -and $path -eq '/api/decision') {
-                $payload = Read-JsonBody $request
-                $cardId = [string]$payload.card_id
-                if ($queue.id -notcontains $cardId) { throw "Unknown card id: $cardId" }
-                $status = [string]$payload.status
-                if ($status -notin @('approved', 'skipped', 'needs_review', 'selected')) {
-                    throw "Invalid card status: $status"
-                }
-
-                $state = Get-State
-                $existing = Get-CardRecord $state $cardId
-                $isSkip = $status -eq 'skipped'
-                $record = [pscustomobject]@{
-                    status = $status
-                    source_kind = if ($isSkip) { '' } else { [string]$payload.source_kind }
-                    source_url = if ($isSkip) { '' } else { [string]$payload.source_url }
-                    # Skipping means this card has no selected art. The previous
-                    # downloaded file is retained locally rather than deleted.
-                    image_filename = if ($isSkip) { '' } elseif ($existing) { [string]$existing.image_filename } else { '' }
-                    crop = if ($isSkip) { [pscustomobject]@{ scale = 1; pan_x = 0; pan_y = 0; mode = 'manual' } } else { $payload.crop }
-                    note = [string]$payload.note
-                    updated_at = [DateTime]::UtcNow.ToString('o')
-                }
-                Set-CardRecord $state $cardId $record
-                Save-State $state
-                Write-Json $stream ([pscustomobject]@{ ok = $true; record = $record })
-                continue
-            }
-
-            if ($request.Method -eq 'POST' -and $path -eq '/api/upload-image') {
-                $payload = Read-JsonBody $request
-                $cardId = [string]$payload.card_id
-                if ($queue.id -notcontains $cardId) { throw "Unknown card id: $cardId" }
-                $dataUrl = [string]$payload.image_data_url
-                $match = [regex]::Match($dataUrl, '^data:(image/(?:jpeg|png|webp|gif|avif));base64,([A-Za-z0-9+/=\r\n]+)$')
-                if (-not $match.Success) { throw 'Upload must be a PNG, JPEG, WebP, GIF, or AVIF data URL.' }
-                $bytes = [Convert]::FromBase64String($match.Groups[2].Value)
-                if ($bytes.Length -gt 25MB) { throw 'The Phase 1 uploader accepts images up to 25 MB.' }
-                $mime = $match.Groups[1].Value
-                $extension = Get-ImageExtension $mime
-                $filename = "$cardId$extension"
-                [System.IO.File]::WriteAllBytes((Join-Path $AssetsDir $filename), $bytes)
-
-                $state = Get-State
-                $existing = Get-CardRecord $state $cardId
-                $record = [pscustomobject]@{
-                    # Replacing art must require a fresh approval; an old approved
-                    # decision must never silently bless a newly uploaded image.
-                    status = 'selected'
-                    source_kind = [string]$payload.source_kind
-                    source_url = [string]$payload.source_url
-                    image_filename = $filename
-                    crop = if ($existing) { $existing.crop } else { [pscustomobject]@{ scale = 1; pan_x = 0; pan_y = 0; mode = 'manual' } }
-                    note = if ($existing) { [string]$existing.note } else { '' }
-                    updated_at = [DateTime]::UtcNow.ToString('o')
-                }
-                Set-CardRecord $state $cardId $record
-                Save-State $state
-                Write-Json $stream ([pscustomobject]@{ ok = $true; asset_url = "/art/$cardId"; record = $record })
-                continue
-            }
-
-            if ($request.Method -eq 'POST' -and $path -eq '/api/import-url') {
-                $payload = Read-JsonBody $request
-                $cardId = [string]$payload.card_id
-                $imageUrl = [string]$payload.image_url
-                if ($queue.id -notcontains $cardId) { throw "Unknown card id: $cardId" }
-                if ($imageUrl -notmatch '^https?://') { throw 'Use a direct http or https image URL.' }
-
-                $webRequest = [System.Net.HttpWebRequest]::Create($imageUrl)
-                $webRequest.Method = 'GET'
-                $webRequest.Timeout = 20000
-                $webRequest.ReadWriteTimeout = 20000
-                $webRequest.UserAgent = 'MarvelSnapArtDesk/0.1 (local personal review tool)'
-                $response = $webRequest.GetResponse()
-                try {
-                    $mime = ([string]$response.ContentType -split ';')[0].Trim().ToLowerInvariant()
-                    $extension = Get-ImageExtension $mime
-                    $input = $response.GetResponseStream()
-                    $memory = [System.IO.MemoryStream]::new()
-                    try {
-                        $buffer = [byte[]]::new(81920)
-                        while (($read = $input.Read($buffer, 0, $buffer.Length)) -gt 0) {
-                            $memory.Write($buffer, 0, $read)
-                            if ($memory.Length -gt 25MB) { throw 'The Phase 1 importer accepts images up to 25 MB.' }
-                        }
-                    } finally {
-                        $input.Dispose()
+                    queue = $queue; state = $state.cards; template = $template
+                    queue_kind = 'Art Desk 2 - randomized real generated-PSD calibration queue'
+                    capabilities = [pscustomobject]@{
+                        analysis_version = 2; advanced_ai = $true; search_configured = $searchConfigured
+                        search_provider = 'brave-images-v1'; https_backend = if ($Script:PythonPath) { 'python-openssl' } else { 'windows-native' }
                     }
-                    $filename = "$cardId$extension"
-                    [System.IO.File]::WriteAllBytes((Join-Path $AssetsDir $filename), $memory.ToArray())
-                    $memory.Dispose()
-                } finally {
-                    $response.Close()
-                }
-
-                $state = Get-State
-                $existing = Get-CardRecord $state $cardId
-                $record = [pscustomobject]@{
-                    # Importing a new URL also resets approval until it is reviewed.
-                    status = 'selected'
-                    source_kind = 'direct_url'
-                    source_url = [string]$payload.source_url
-                    image_filename = $filename
-                    crop = if ($existing) { $existing.crop } else { [pscustomobject]@{ scale = 1; pan_x = 0; pan_y = 0; mode = 'manual' } }
-                    note = if ($existing) { [string]$existing.note } else { '' }
-                    updated_at = [DateTime]::UtcNow.ToString('o')
-                }
-                Set-CardRecord $state $cardId $record
-                Save-State $state
-                Write-Json $stream ([pscustomobject]@{ ok = $true; asset_url = "/art/$cardId"; record = $record })
-                continue
+                }); continue
             }
-
+            if ($request.Method -eq 'GET' -and $path.StartsWith('/psd/')) {
+                $cardId = $path.Substring(5); Assert-CardId $cardId; $psdPath = Join-Path $CardPsdDir "$cardId.psd"
+                if (-not (Test-Path -LiteralPath $psdPath)) { Write-Text $stream 404 'Generated PSD is missing.'; continue }
+                Write-Response $stream 200 'image/vnd.adobe.photoshop' ([IO.File]::ReadAllBytes($psdPath)); continue
+            }
+            if ($request.Method -eq 'POST' -and $path -eq '/api/save-template-overlay') {
+                $payload = Read-JsonBody $request; $cardId = [string]$payload.card_id; Assert-CardId $cardId
+                $match = [regex]::Match([string]$payload.image_data_url, '^data:image/png;base64,([A-Za-z0-9+/=\r\n]+)$')
+                if (-not $match.Success) { throw 'Template overlay must be a PNG data URL.' }
+                $bytes = [Convert]::FromBase64String($match.Groups[1].Value); if ($bytes.Length -gt 12MB) { throw 'Template overlay was unexpectedly large.' }
+                Save-BytesAtomic (Join-Path $OverlayDir "$cardId.png") $bytes
+                Write-Json $stream ([pscustomobject]@{ ok = $true; overlay_url = "/template-overlay/$cardId" }); continue
+            }
+            if ($request.Method -eq 'GET' -and $path.StartsWith('/template-overlay/')) {
+                $cardId = $path.Substring(18); Assert-CardId $cardId; $overlayPath = Join-Path $OverlayDir "$cardId.png"
+                if (-not (Test-Path -LiteralPath $overlayPath)) { Write-Text $stream 404 'Template overlay has not been rendered yet.'; continue }
+                Write-Response $stream 200 'image/png' ([IO.File]::ReadAllBytes($overlayPath)); continue
+            }
+            if ($request.Method -eq 'POST' -and $path -eq '/api/settings/search') {
+                $payload = Read-JsonBody $request; $key = ([string]$payload.brave_api_key).Trim()
+                if ($key.Length -lt 10 -or $key.Length -gt 512) { throw 'The Brave Search API key format is invalid.' }
+                Save-JsonAtomic $SettingsPath ([pscustomobject]@{ brave_api_key = $key; updated_at = [DateTime]::UtcNow.ToString('o') }) 4
+                Write-Json $stream ([pscustomobject]@{ ok = $true; search_configured = $true }); continue
+            }
+            if ($request.Method -eq 'POST' -and $path -eq '/api/search-candidates') {
+                $payload = Read-JsonBody $request; $cardId = [string]$payload.card_id; Assert-CardId $cardId
+                $query = ([string]$payload.query).Trim(); if ($query.Length -lt 2 -or $query.Length -gt 240) { throw 'Search query must be between 2 and 240 characters.' }
+                $count = [int]$payload.count; if ($count -lt 6) { $count = 6 }; if ($count -gt 100) { $count = 100 }
+                $response = Invoke-BraveImageSearch $query $count; $candidates = @(ConvertFrom-BraveImageResults $response | Select-Object -First $count)
+                $set = [pscustomobject]@{ version = 1; card_id = $cardId; query = $query; updated_at = [DateTime]::UtcNow.ToString('o'); candidates = $candidates }
+                Save-JsonAtomic (Get-CandidateFile $cardId) $set 12
+                Write-Json $stream ([pscustomobject]@{ ok = $true; candidates = $candidates; query = $query }); continue
+            }
+            if ($request.Method -eq 'GET' -and $path.StartsWith('/api/candidates/')) {
+                $cardId = $path.Substring(16); $set = Get-CandidateSet $cardId
+                Write-Json $stream ([pscustomobject]@{ ok = $true; candidates = @($set.candidates); query = [string]$set.query; updated_at = $set.updated_at }); continue
+            }
+            if ($request.Method -eq 'GET' -and $path.StartsWith('/candidate-thumb/')) {
+                $parts = @($path.Substring(17) -split '/'); if ($parts.Count -ne 2) { throw 'Invalid candidate thumbnail request.' }
+                $cardId = $parts[0]; $candidateId = $parts[1]; Assert-CardId $cardId; $candidate = Get-Candidate $cardId $candidateId
+                $cacheDir = Join-Path $CandidateCacheDir $cardId; Ensure-Directory $cacheDir
+                $cachePath = Join-Path $cacheDir "$candidateId.bin"; $mimePath = Join-Path $cacheDir "$candidateId.mime"
+                if (-not (Test-Path -LiteralPath $cachePath) -or -not (Test-Path -LiteralPath $mimePath)) {
+                    $download = Invoke-ImageDownload ([string]$candidate.thumbnail_url) 8MB; Save-BytesAtomic $cachePath $download.bytes
+                    [IO.File]::WriteAllText($mimePath, $download.mime, [Text.UTF8Encoding]::new($false))
+                }
+                Write-Response $stream 200 ([IO.File]::ReadAllText($mimePath).Trim()) ([IO.File]::ReadAllBytes($cachePath)); continue
+            }
+            if ($request.Method -eq 'POST' -and $path -eq '/api/select-candidate') {
+                $payload = Read-JsonBody $request; $cardId = [string]$payload.card_id; Assert-CardId $cardId
+                $candidate = Get-Candidate $cardId ([string]$payload.candidate_id); $download = Invoke-ImageDownload ([string]$candidate.original_url) 25MB
+                $filename = "$cardId-$($candidate.id)$(Get-ImageExtension $download.mime)"; Save-BytesAtomic (Join-Path $AssetsDir $filename) $download.bytes
+                $state = Get-State; $existing = Get-CardRecord $state $cardId
+                $record = [pscustomobject]@{
+                    status = 'selected'; source_kind = 'art_scout'; source_url = [string]$candidate.source_page_url
+                    image_filename = $filename; candidate_id = [string]$candidate.id; crop = New-DefaultCrop
+                    analysis = $null; note = if ($existing) { [string]$existing.note } else { '' }; updated_at = [DateTime]::UtcNow.ToString('o')
+                }
+                Set-CardRecord $state $cardId $record; Save-State $state
+                Write-Json $stream ([pscustomobject]@{ ok = $true; asset_url = "/art/$cardId"; record = $record }); continue
+            }
+            if ($request.Method -eq 'POST' -and $path -eq '/api/analysis') {
+                $payload = Read-JsonBody $request; $cardId = [string]$payload.card_id; Assert-CardId $cardId
+                $state = Get-State; $existing = Get-CardRecord $state $cardId
+                if ($null -eq $existing -or [string]::IsNullOrWhiteSpace([string]$existing.image_filename)) { throw 'Select artwork before saving its analysis.' }
+                $record = [pscustomobject]@{
+                    status = 'selected'; source_kind = [string]$existing.source_kind; source_url = [string]$existing.source_url
+                    image_filename = [string]$existing.image_filename; candidate_id = [string]$existing.candidate_id
+                    crop = $payload.crop; analysis = $payload.analysis; note = [string]$existing.note; updated_at = [DateTime]::UtcNow.ToString('o')
+                }
+                Set-CardRecord $state $cardId $record; Save-State $state
+                Write-Json $stream ([pscustomobject]@{ ok = $true; record = $record }); continue
+            }
+            if ($request.Method -eq 'POST' -and $path -eq '/api/decision') {
+                $payload = Read-JsonBody $request; $cardId = [string]$payload.card_id; Assert-CardId $cardId; $status = [string]$payload.status
+                if ($status -notin @('approved', 'skipped', 'needs_review', 'selected')) { throw "Invalid card status: $status" }
+                $state = Get-State; $existing = Get-CardRecord $state $cardId; $isSkip = $status -eq 'skipped'
+                if ($status -eq 'approved' -and ($null -eq $existing -or [string]::IsNullOrWhiteSpace([string]$existing.image_filename))) { throw 'Choose artwork before approving.' }
+                $record = [pscustomobject]@{
+                    status = $status; source_kind = if ($isSkip) { '' } else { [string]$payload.source_kind }
+                    source_url = if ($isSkip) { '' } else { [string]$payload.source_url }
+                    image_filename = if ($isSkip) { '' } elseif ($existing) { [string]$existing.image_filename } else { '' }
+                    candidate_id = if ($isSkip) { '' } else { [string]$payload.candidate_id }
+                    crop = if ($isSkip) { New-DefaultCrop } else { $payload.crop }; analysis = if ($isSkip) { $null } else { $payload.analysis }
+                    note = [string]$payload.note; updated_at = [DateTime]::UtcNow.ToString('o')
+                }
+                Set-CardRecord $state $cardId $record; Save-State $state
+                Write-Json $stream ([pscustomobject]@{ ok = $true; record = $record }); continue
+            }
+            if ($request.Method -eq 'POST' -and $path -eq '/api/upload-image') {
+                $payload = Read-JsonBody $request; $cardId = [string]$payload.card_id; Assert-CardId $cardId
+                $match = [regex]::Match([string]$payload.image_data_url, '^data:(image/(?:jpeg|png|webp|gif|avif));base64,([A-Za-z0-9+/=\r\n]+)$')
+                if (-not $match.Success) { throw 'Upload must be a PNG, JPEG, WebP, GIF, or AVIF data URL.' }
+                $bytes = [Convert]::FromBase64String($match.Groups[2].Value); if ($bytes.Length -gt 25MB) { throw 'Images must be 25 MB or smaller.' }
+                $detected = Get-ImageMime $bytes; $filename = "$cardId$(Get-ImageExtension $detected)"; Save-BytesAtomic (Join-Path $AssetsDir $filename) $bytes
+                $state = Get-State; $existing = Get-CardRecord $state $cardId
+                $record = [pscustomobject]@{
+                    status = 'selected'; source_kind = [string]$payload.source_kind; source_url = [string]$payload.source_url
+                    image_filename = $filename; candidate_id = ''; crop = New-DefaultCrop; analysis = $null
+                    note = if ($existing) { [string]$existing.note } else { '' }; updated_at = [DateTime]::UtcNow.ToString('o')
+                }
+                Set-CardRecord $state $cardId $record; Save-State $state
+                Write-Json $stream ([pscustomobject]@{ ok = $true; asset_url = "/art/$cardId"; record = $record }); continue
+            }
+            if ($request.Method -eq 'POST' -and $path -eq '/api/import-url') {
+                $payload = Read-JsonBody $request; $cardId = [string]$payload.card_id; Assert-CardId $cardId
+                $download = Invoke-ImageDownload ([string]$payload.image_url) 25MB
+                $filename = "$cardId$(Get-ImageExtension $download.mime)"; Save-BytesAtomic (Join-Path $AssetsDir $filename) $download.bytes
+                $state = Get-State; $existing = Get-CardRecord $state $cardId
+                $record = [pscustomobject]@{
+                    status = 'selected'; source_kind = 'direct_url'; source_url = [string]$payload.source_url
+                    image_filename = $filename; candidate_id = ''; crop = New-DefaultCrop; analysis = $null
+                    note = if ($existing) { [string]$existing.note } else { '' }; updated_at = [DateTime]::UtcNow.ToString('o')
+                }
+                Set-CardRecord $state $cardId $record; Save-State $state
+                Write-Json $stream ([pscustomobject]@{ ok = $true; asset_url = "/art/$cardId"; record = $record }); continue
+            }
             if ($request.Method -eq 'GET' -and $path.StartsWith('/art/')) {
-                $cardId = $path.Substring(5)
-                if ($cardId -notmatch '^[a-z0-9-]+$') { throw 'Invalid asset request.' }
-                $state = Get-State
-                $record = Get-CardRecord $state $cardId
-                if ($null -eq $record -or [string]::IsNullOrWhiteSpace([string]$record.image_filename)) {
-                    Write-Text $stream 404 'No saved art for this card.'
-                    continue
-                }
-                $assetPath = Join-Path $AssetsDir ([string]$record.image_filename)
-                if (-not (Test-Path -LiteralPath $assetPath)) {
-                    Write-Text $stream 404 'Saved asset is missing from disk.'
-                    continue
-                }
-                $contentType = switch ([IO.Path]::GetExtension($assetPath).ToLowerInvariant()) {
-                    '.jpg' { 'image/jpeg' }
-                    '.jpeg' { 'image/jpeg' }
-                    '.png' { 'image/png' }
-                    '.webp' { 'image/webp' }
-                    '.gif' { 'image/gif' }
-                    '.avif' { 'image/avif' }
-                    default { 'application/octet-stream' }
-                }
-                Write-Response $stream 200 $contentType ([System.IO.File]::ReadAllBytes($assetPath))
-                continue
+                $cardId = $path.Substring(5); Assert-CardId $cardId; $state = Get-State; $record = Get-CardRecord $state $cardId
+                if ($null -eq $record -or [string]::IsNullOrWhiteSpace([string]$record.image_filename)) { Write-Text $stream 404 'No saved art for this card.'; continue }
+                $assetPath = [IO.Path]::GetFullPath((Join-Path $AssetsDir ([string]$record.image_filename))); $assetRoot = [IO.Path]::GetFullPath($AssetsDir).TrimEnd('\') + '\'
+                if (-not $assetPath.StartsWith($assetRoot, [StringComparison]::OrdinalIgnoreCase) -or -not (Test-Path -LiteralPath $assetPath)) { Write-Text $stream 404 'Saved asset is missing from disk.'; continue }
+                $bytes = [IO.File]::ReadAllBytes($assetPath); Write-Response $stream 200 (Get-ImageMime $bytes) $bytes; continue
             }
 
             Write-Text $stream 404 'Not found.'
         } catch {
-            # A timed-out or abandoned preconnection cannot receive an error
-            # response. Never let that failed response take down the listener.
-            try {
-                Write-Json $stream ([pscustomobject]@{ ok = $false; error = $_.Exception.Message }) 400
-            } catch {}
-        } finally {
-            $stream.Dispose()
-            $client.Close()
-        }
+            try { Write-Json $stream ([pscustomobject]@{ ok = $false; error = $_.Exception.Message }) 400 } catch {}
+        } finally { $stream.Dispose(); $client.Close() }
     }
-} finally {
-    $listener.Stop()
-}
+} finally { $listener.Stop() }

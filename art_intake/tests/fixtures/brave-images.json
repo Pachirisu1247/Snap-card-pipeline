@@ -1,0 +1,16 @@
+{
+  "results": [
+    {
+      "title": "Havok full character illustration",
+      "url": "https://example.com/havok-source",
+      "thumbnail": { "src": "https://images.example.com/havok-thumb.jpg" },
+      "properties": { "url": "https://images.example.com/havok-original.jpg", "width": 1800, "height": 2400 }
+    },
+    {
+      "title": "Havok alternate comic art",
+      "url": "https://example.net/havok-alternate-source",
+      "thumbnail": { "src": "https://images.example.net/havok-alt-thumb.png" },
+      "properties": { "url": "https://images.example.net/havok-alt-original.png", "width": 2200, "height": 1600 }
+    }
+  ]
+}

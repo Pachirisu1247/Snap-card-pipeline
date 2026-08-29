@@ -1,6 +1,13 @@
 # User-created review decisions and downloaded art stay local.
 data/state.json
 data/real_psd_test_queue.json
+data/settings.local.json
+data/candidates/
+data/*.log
+cache/
+node_modules/
+__pycache__/
+*.pyc
 assets/original/*
 !assets/original/.gitkeep
 assets/template_overlays/*

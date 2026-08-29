@@ -1,0 +1,16 @@
+{
+  "name": "marvel-snap-art-desk",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:vendor": "node ./build-vendor.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "test:server": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./tests/server-smoke.ps1"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "4.2.0"
+  },
+  "devDependencies": {
+    "onnxruntime-web": "1.26.0-dev.20260416-b7804b056c"
+  }
+}
