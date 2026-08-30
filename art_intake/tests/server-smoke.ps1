@@ -41,6 +41,8 @@ try {
     }
 
     Assert-Equal @($bootstrap.queue).Count 48 'Bootstrap queue must contain all calibration cards'
+    Assert-Equal $bootstrap.calibration.version 1 'Bootstrap must include calibration contract v1'
+    Assert-Equal @($bootstrap.candidate_inventory.PSObject.Properties).Count 0 'Fresh runtime candidate inventory must be empty'
     Assert-Equal $bootstrap.capabilities.analysis_version 2 'Bootstrap must advertise analysis contract v2'
     Assert-Equal $bootstrap.capabilities.search_configured $true 'Mock search must count as configured'
     if ($bootstrap.capabilities.https_backend -notin @('python-openssl', 'windows-native')) { throw 'Bootstrap did not advertise a supported HTTPS backend.' }
@@ -82,6 +84,12 @@ try {
     $approved = Invoke-JsonPost '/api/decision' @{ card_id = $cardId; status = 'approved'; source_kind = 'local_file'; source_url = 'https://example.com/source'; note = 'smoke'; crop = $analyzed.record.crop; analysis = $analysis; candidate_id = '' }
     Assert-Equal $approved.record.status 'approved' 'Approval did not persist'
     Assert-Equal (Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/art/$cardId").StatusCode 200 'Saved art route failed'
+    $jsonReport = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/calibration-report.json"
+    Assert-Equal @($jsonReport.rows).Count 48 'JSON calibration report must include the whole queue'
+    Assert-Equal @($jsonReport.rows | Where-Object { $_.card_id -eq $cardId })[0].outcome 'zero_touch' 'JSON report did not classify untouched approval'
+    $csvReport = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/api/calibration-report.csv"
+    if ($csvReport.Headers['Content-Disposition'] -notmatch 'attachment') { throw 'CSV report is missing its download header.' }
+    if ($csvReport.Content -notmatch 'card_id.*confidence_band.*outcome') { throw 'CSV report is missing expected metric columns.' }
 
     $privateRejected = $false
     try { Invoke-JsonPost '/api/import-url' @{ card_id = $cardId; image_url = 'http://127.0.0.1/private.png'; source_url = '' } | Out-Null }
@@ -95,7 +103,53 @@ try {
     $statePath = Join-Path $RuntimeFull 'data\state.json'
     $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
     Assert-Equal $state.version 2 'Atomic state file is not contract v2'
-    Write-Host "Server smoke passed: 48-card bootstrap, static assets, candidate persistence, upload, analysis, decision, and SSRF rejection." -ForegroundColor Green
+
+    $calibrationResponse = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/calibration"
+    $calibrationCard = $calibrationResponse.calibration.cards.PSObject.Properties[$cardId].Value
+    Assert-Equal $calibrationCard.analysis_count 1 'Calibration must record analysis automatically'
+    Assert-Equal $calibrationCard.candidate_count 2 'Calibration must record candidate discovery automatically'
+    Assert-Equal $calibrationCard.status 'skipped' 'Calibration must follow the final review decision'
+    if ($null -eq $calibrationCard.baseline_crop) { throw 'Calibration baseline crop was not preserved.' }
+    $sessionId = [string]$calibrationResponse.calibration.session_id
+
+    # Restart the isolated server and prove that calibration/search checkpoints
+    # survive the process boundary rather than living only in browser memory.
+    $process.Kill(); $process.WaitForExit()
+    $restartOut = Join-Path $RuntimeFull 'server-restart.stdout.log'; $restartErr = Join-Path $RuntimeFull 'server-restart.stderr.log'
+    $process = Start-Process -FilePath 'powershell.exe' -ArgumentList $arguments -WindowStyle Hidden -RedirectStandardOutput $restartOut -RedirectStandardError $restartErr -PassThru
+    $deadline = [DateTime]::UtcNow.AddSeconds(15); $restarted = $null
+    do {
+        Start-Sleep -Milliseconds 200
+        try { $restarted = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/bootstrap" -TimeoutSec 2; break }
+        catch { if ($process.HasExited) { break } }
+    } while ([DateTime]::UtcNow -lt $deadline)
+    if ($null -eq $restarted) { throw 'Art Desk test server did not restart.' }
+    Assert-Equal $restarted.calibration.session_id $sessionId 'Calibration session changed across restart'
+    Assert-Equal $restarted.candidate_inventory.PSObject.Properties[$cardId].Value.count 2 'Candidate inventory did not survive restart'
+    Assert-Equal $restarted.calibration.cards.PSObject.Properties[$cardId].Value.analysis_count 1 'Analysis evidence did not survive restart'
+
+    # A provider failure is evidence too: it must increment health telemetry
+    # without erasing the previously cached successful candidate set.
+    $process.Kill(); $process.WaitForExit()
+    $env:ART_DESK_MOCK_SEARCH_RESPONSE = Join-Path $RuntimeFull 'missing-provider-response.json'
+    $failureOut = Join-Path $RuntimeFull 'server-failure.stdout.log'; $failureErr = Join-Path $RuntimeFull 'server-failure.stderr.log'
+    $process = Start-Process -FilePath 'powershell.exe' -ArgumentList $arguments -WindowStyle Hidden -RedirectStandardOutput $failureOut -RedirectStandardError $failureErr -PassThru
+    $deadline = [DateTime]::UtcNow.AddSeconds(15); $failureServer = $null
+    do {
+        Start-Sleep -Milliseconds 200
+        try { $failureServer = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/bootstrap" -TimeoutSec 2; break }
+        catch { if ($process.HasExited) { break } }
+    } while ([DateTime]::UtcNow -lt $deadline)
+    if ($null -eq $failureServer) { throw 'Provider-failure test server did not start.' }
+    $providerRejected = $false
+    try { Invoke-JsonPost '/api/search-candidates' @{ card_id = $cardId; query = 'failure telemetry test'; count = 80 } | Out-Null }
+    catch { $providerRejected = $_.Exception.Message -match '400' }
+    if (-not $providerRejected) { throw 'Missing mock provider response did not fail safely.' }
+    $failureCalibration = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/calibration"
+    Assert-Equal $failureCalibration.calibration.cards.PSObject.Properties[$cardId].Value.provider_failures 1 'Provider failure telemetry did not persist'
+    Assert-Equal $failureCalibration.candidate_inventory.PSObject.Properties[$cardId].Value.count 2 'Provider failure erased the last good candidate set'
+
+    Write-Host "Server smoke passed: 48-card bootstrap, static assets, candidate persistence, calibration restart recovery, provider-failure isolation, upload, analysis, decision, and SSRF rejection." -ForegroundColor Green
 } finally {
     if ($process -and -not $process.HasExited) { $process.Kill(); $process.WaitForExit() }
     $env:ART_DESK_MOCK_SEARCH_RESPONSE = $oldMock

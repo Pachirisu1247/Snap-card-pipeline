@@ -16,6 +16,19 @@
   </header>
 
   <main class="workspace">
+    <section class="panel health-panel" aria-labelledby="healthTitle">
+      <div class="health-heading">
+        <div><p class="eyebrow">Measurable 48-card run</p><h2 id="healthTitle">Calibration health</h2></div>
+        <div class="button-row"><button id="exportJsonButton" type="button">Export JSON</button><button id="exportCsvButton" type="button">Export CSV</button></div>
+      </div>
+      <div class="health-metrics">
+        <div><strong id="calibrationReviewed">0 / 48</strong><span>reviewed</span></div>
+        <div><strong id="zeroTouchMetric">—</strong><span>zero-touch</span></div>
+        <div><strong id="fallbackMetric">—</strong><span>fallback</span></div>
+        <div><strong id="safetyMetric">Clear</strong><span>safety gate</span></div>
+      </div>
+      <div class="health-footer"><p id="checkpointText">Next checkpoint: 12 reviewed</p><p id="lastSavedText">Local evidence loads at startup</p></div>
+    </section>
     <aside class="panel queue-panel">
       <div class="section-heading"><div><p class="eyebrow">Calibration queue</p><h2 id="queueKind">Loading cards…</h2></div></div>
       <div class="stats"><span id="progressText">0 of 0 reviewed</span><span id="unresolvedText">0 approved</span></div>
@@ -76,11 +89,15 @@
     <section class="panel scout-panel" aria-labelledby="scoutTitle">
       <div class="scout-toolbar">
         <div><p class="eyebrow">Candidate discovery</p><h2 id="scoutTitle">Art Scout</h2><p id="scoutSummary" class="hint">Search, filter, deduplicate, auto-frame, and rank a large candidate set.</p></div>
-        <div class="scout-controls"><input id="searchQuery" aria-label="Art search query" placeholder="Character search query"><input id="searchCount" type="number" min="6" max="100" value="48" aria-label="Number of image candidates"><button id="searchButton" class="primary" type="button">Find candidates</button></div>
+        <div class="scout-controls"><input id="searchQuery" aria-label="Art search query" placeholder="Character search query"><input id="searchCount" type="number" min="1" max="200" value="80" aria-label="Number of image candidates"><button id="searchButton" class="primary" type="button">Find candidates</button></div>
       </div>
       <div id="searchSetup" class="search-setup hidden">
         <p>Web discovery uses the documented Brave Image Search API. The key stays in an ignored local settings file and is never returned to the page after saving.</p>
         <div class="button-row"><input id="braveKeyInput" type="password" autocomplete="off" placeholder="Brave Search API key"><button id="saveSearchKeyButton" type="button">Save local key</button></div>
+      </div>
+      <div class="batch-bar">
+        <div><strong>Batch discovery</strong><p id="batchStatus" class="hint">Prepare cached search sets serially; deep-rank only the active card.</p></div>
+        <div class="button-row"><button id="batchPilotButton" type="button">Pilot 12</button><button id="batchAllButton" type="button">All unresolved</button><button id="batchPauseButton" class="hidden" type="button">Pause</button><button id="batchCancelButton" class="hidden danger" type="button">Cancel</button></div>
       </div>
       <div id="candidateProgress" class="progress-line hidden"><div></div><span></span></div>
       <div id="candidateGrid" class="candidate-grid"></div>

@@ -4,6 +4,8 @@ import { solveCrop, confidenceBand } from './crop-solver.js';
 import { ImageAnalyzer, analyzeSourceFallback, perceptualHash } from './image-analysis.js';
 import { deterministicFilter, deduplicateCandidates, rankCandidates } from './candidate-ranker.js';
 import { PhotopeaClient } from './photopea-client.js';
+import { summarizeCalibration } from './calibration.js';
+import { BatchController } from './batch-controller.js';
 
 const $ = id => document.getElementById(id);
 const app = {
@@ -11,7 +13,20 @@ const app = {
   localDataUrl: null, localToken: 0, importing: false, analyzing: false,
   analysis: {}, stagedCrop: {}, liveTimer: null, liveQueued: false,
   candidates: [], showAllCandidates: false, candidateRun: 0,
+  calibration: { version: 1, cards: {} }, candidateInventory: {}, batchState: { status: 'idle' }, lastSavedAt: null,
 };
+const batch = new BatchController({
+  runTask: async card => {
+    const count = Math.max(1, Math.min(200, Number($('searchCount').value) || 80));
+    const query = `${displayName(card.id)} Marvel character comic art`;
+    const data = await postJson('/api/search-candidates', { card_id: card.id, query, count });
+    app.calibration = data.calibration || app.calibration;
+    app.candidateInventory[card.id] = { count: (data.candidates || []).length, query, updated_at: new Date().toISOString() };
+    markSaved(); renderCalibration();
+    return { count: (data.candidates || []).length };
+  },
+  onUpdate: state => { app.batchState = state; renderBatchState(); syncControls(); },
+});
 const analyzer = new ImageAnalyzer();
 const photopea = new PhotopeaClient($('photopea'), {
   onStatus: message => { $('previewStatus').textContent = message; syncControls(); },
@@ -75,6 +90,31 @@ function renderQueue() {
   }));
 }
 
+function percent(value) { return value === null || value === undefined ? '—' : `${Math.round(value * 100)}%`; }
+
+function renderCalibration() {
+  const summary = summarizeCalibration(app.calibration, app.queue);
+  $('calibrationReviewed').textContent = `${summary.reviewed_count} / ${summary.target_count}`;
+  $('zeroTouchMetric').textContent = percent(summary.zero_touch_rate);
+  $('fallbackMetric').textContent = percent(summary.fallback_rate);
+  $('safetyMetric').textContent = summary.gates.safety ? 'Clear' : `${summary.hard_failures.length} failure${summary.hard_failures.length === 1 ? '' : 's'}`;
+  $('safetyMetric').classList.toggle('bad', !summary.gates.safety);
+  const atCheckpoint = summary.reviewed_count > 0 && summary.reviewed_count % 12 === 0;
+  $('checkpointText').textContent = atCheckpoint
+    ? `Checkpoint reached at ${summary.reviewed_count}: inspect gates before continuing.`
+    : `Next checkpoint: ${summary.next_checkpoint} reviewed${summary.gates.pilot_zero_touch === false ? ' · pilot zero-touch gate needs analysis' : ''}`;
+  $('lastSavedText').textContent = app.lastSavedAt ? `Last local save ${app.lastSavedAt.toLocaleTimeString()}` : 'Local evidence loaded at startup';
+}
+
+function markSaved() { app.lastSavedAt = new Date(); }
+
+function downloadReport(format) {
+  const link = document.createElement('a'); link.href = `/api/calibration-report.${format}`;
+  link.download = `art-desk-calibration.${format}`;
+  link.className = 'hidden'; document.body.append(link); link.click();
+  setTimeout(() => link.remove(), 1000);
+}
+
 function renderAnalysis() {
   const current = analysis();
   const badge = $('confidenceBadge');
@@ -111,7 +151,7 @@ function render() {
   $('searchQuery').value = `${displayName(card.id)} Marvel character comic art`;
   $('backButton').disabled = app.index === 0;
   $('nextButton').disabled = app.index === app.queue.length - 1;
-  renderQueue(); renderAnalysis(); syncControls();
+  renderQueue(); renderAnalysis(); renderCalibration(); syncControls();
   photopea.prefetch(app.queue[app.index + 1]);
   loadSavedCandidates().catch(() => {});
 }
@@ -125,6 +165,9 @@ function syncControls() {
   $('reviewButton').disabled = busy;
   $('skipButton').disabled = busy;
   $('searchButton').disabled = busy || !app.capabilities.search_configured;
+  const batchActive = ['running', 'paused'].includes(app.batchState.status);
+  $('batchPilotButton').disabled = busy || batchActive || !app.capabilities.search_configured;
+  $('batchAllButton').disabled = busy || batchActive || !app.capabilities.search_configured;
   $('searchSetup').classList.toggle('hidden', Boolean(app.capabilities.search_configured));
 }
 
@@ -204,6 +247,8 @@ async function persistAnalysis() {
   if (!record()?.image_filename) return;
   const data = await postJson('/api/analysis', { card_id: active().id, crop: crop(), analysis: analysis() });
   if (data.record) app.state[active().id] = data.record;
+  if (data.calibration) app.calibration = data.calibration;
+  markSaved(); renderCalibration();
 }
 
 function queueLivePreview() {
@@ -261,6 +306,8 @@ async function saveDecision(status, goNext) {
       crop: crop(), analysis: analysis(), candidate_id: record()?.candidate_id || '',
     });
     app.state[active().id] = data.record;
+    if (data.calibration) app.calibration = data.calibration;
+    markSaved(); renderCalibration();
     toast(status === 'approved' ? 'Approved — moving to next card.' : 'Decision saved locally.');
     if (goNext && app.index < app.queue.length - 1) navigate(app.index + 1); else render();
   } catch (error) { toast(error.message, true); }
@@ -286,6 +333,9 @@ async function searchCandidates() {
   try {
     const data = await postJson('/api/search-candidates', { card_id: card.id, query, count });
     if (run !== app.candidateRun || active().id !== card.id) return;
+    if (data.calibration) app.calibration = data.calibration;
+    app.candidateInventory[card.id] = { count: (data.candidates || []).length, query, updated_at: new Date().toISOString() };
+    markSaved(); renderCalibration();
     await prepareCandidates(data.candidates || [], run);
   } catch (error) { toast(`Art Scout search failed: ${error.message}`, true); hideCandidateProgress(); }
   finally { syncControls(); }
@@ -301,7 +351,10 @@ async function loadSavedCandidates() {
 
 async function prepareCandidates(input, run) {
   const filtered = deterministicFilter(input);
-  const usable = filtered.filter(candidate => !candidate.rejected);
+  const usableAll = filtered.filter(candidate => !candidate.rejected);
+  // Spend the expensive hashing/framing/model budget on the strongest
+  // metadata candidates, not merely the provider's first 24 results.
+  const usable = rankCandidates(usableAll).slice(0, 24);
   const prepared = [];
   for (let index = 0; index < usable.length; index += 1) {
     if (run !== app.candidateRun) return;
@@ -316,6 +369,7 @@ async function prepareCandidates(input, run) {
     }
   }
   const available = prepared.filter(candidate => !candidate.unavailable);
+  const unavailableCount = prepared.length - available.length;
   const deduped = deduplicateCandidates(available);
   let ranked = rankCandidates(deduped.unique);
   app.candidates = ranked; renderCandidates();
@@ -331,7 +385,34 @@ async function prepareCandidates(input, run) {
     }
   }
   app.candidates = ranked; renderCandidates(); hideCandidateProgress();
-  $('scoutSummary').textContent = `${input.length} discovered · ${available.length} usable · ${deduped.removed} near-duplicate${deduped.removed === 1 ? '' : 's'} removed · showing ${Math.min(6, ranked.length)} finalists`;
+  $('scoutSummary').textContent = `${input.length} discovered · ${available.length}/${usable.length} shortlisted thumbnails inspected · ${unavailableCount} unavailable · ${deduped.removed} near-duplicate${deduped.removed === 1 ? '' : 's'} removed · showing ${Math.min(6, ranked.length)} finalists`;
+  if (!available.length && usable.length) toast('No shortlisted thumbnails could be inspected. The saved discovery set is intact; retry when image hosts are reachable.', true);
+}
+
+function unresolvedWithoutCandidates() {
+  return app.queue.filter(card => !['approved', 'skipped'].includes(app.state[card.id]?.status) && !app.candidateInventory[card.id]?.count);
+}
+
+function startBatch(limit = null) {
+  const cards = unresolvedWithoutCandidates();
+  const selected = limit ? cards.slice(0, limit) : cards;
+  if (!selected.length) { toast('Every unresolved card already has a saved candidate set.'); return; }
+  batch.start(selected).then(result => {
+    const found = result.completed.reduce((sum, entry) => sum + Number(entry.result?.count || 0), 0);
+    toast(`Batch ${result.status}: ${result.completed.length} cards, ${found} candidates, ${result.failed.length} failures.`, result.failed.length > 0);
+  }).catch(error => toast(error.message, true));
+}
+
+function renderBatchState() {
+  const state = app.batchState;
+  const activeState = ['running', 'paused'].includes(state.status);
+  $('batchPauseButton').classList.toggle('hidden', !activeState);
+  $('batchCancelButton').classList.toggle('hidden', !activeState);
+  $('batchPauseButton').textContent = state.status === 'paused' ? 'Resume' : 'Pause';
+  if (state.status === 'idle') return;
+  const processed = (state.completed?.length || 0) + (state.failed?.length || 0);
+  const current = state.current ? ` · ${displayName(state.current.id)}` : '';
+  $('batchStatus').textContent = `${state.status[0].toUpperCase()}${state.status.slice(1)} · ${processed}/${state.total} processed · ${state.failed?.length || 0} failed${current}`;
 }
 
 function candidateSource(candidate) { return `/candidate-thumb/${encodeURIComponent(active().id)}/${encodeURIComponent(candidate.id)}`; }
@@ -392,6 +473,12 @@ function bindEvents() {
   $('skipButton').addEventListener('click', () => saveDecision('skipped', true));
   $('saveSearchKeyButton').addEventListener('click', saveSearchKey);
   $('searchButton').addEventListener('click', searchCandidates);
+  $('batchPilotButton').addEventListener('click', () => startBatch(12));
+  $('batchAllButton').addEventListener('click', () => startBatch());
+  $('batchPauseButton').addEventListener('click', () => app.batchState.status === 'paused' ? batch.resume() : batch.pause());
+  $('batchCancelButton').addEventListener('click', () => batch.cancel());
+  $('exportJsonButton').addEventListener('click', () => downloadReport('json'));
+  $('exportCsvButton').addEventListener('click', () => downloadReport('csv'));
   $('showAllCandidatesButton').addEventListener('click', () => { app.showAllCandidates = !app.showAllCandidates; renderCandidates(); });
   for (const [rangeId, numberId] of [['scaleInput', 'scaleValue'], ['panXInput', 'panXValue'], ['panYInput', 'panYValue']]) {
     const range = $(rangeId), number = $(numberId);
@@ -415,6 +502,7 @@ async function bootstrap() {
     const data = await getJson('/api/bootstrap');
     app.queue = (Array.isArray(data.queue) ? data.queue : data.queue?.value || []).slice().sort((a, b) => String(a.id).localeCompare(String(b.id), undefined, { sensitivity: 'base' }));
     app.state = migrateState(data.state || {}); app.template = data.template; app.capabilities = data.capabilities || {};
+    app.calibration = data.calibration || { version: 1, cards: {} }; app.candidateInventory = data.candidate_inventory || {};
     const unfinished = app.queue.findIndex(card => !app.state[card.id]?.status || ['selected', 'needs_review'].includes(app.state[card.id]?.status));
     app.index = unfinished >= 0 ? unfinished : 0;
     $('queueKind').textContent = data.queue_kind || 'Real-PSD calibration queue';

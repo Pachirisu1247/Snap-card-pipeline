@@ -30,6 +30,26 @@ Art Scout uses the documented Brave Image Search API. Enter the key once in the
 setup panel or set `ART_DESK_BRAVE_API_KEY`. The key is saved only in ignored
 `data/settings.local.json`, is never returned by the API, and is never committed.
 
+## Calibration and batch discovery
+
+The health strip turns the fixed 48-card queue into a resumable calibration
+run. The first automatic crop for each card is preserved as its baseline;
+later approval records the final crop and grades it as zero-touch, minor, or
+major adjustment. Low-confidence crops never count as zero-touch. High-
+confidence critical-region retention and occlusion are hard safety gates.
+
+Calibration evidence is stored atomically in ignored
+`data/calibration-session.json`, separately from the existing review state.
+Use **Export JSON** for the complete evidence/session and **Export CSV** for a
+flat 48-row audit report. Checkpoints occur every 12 reviewed cards.
+
+Art Scout's **Pilot 12** and **All unresolved** controls prepare search results
+one card at a time. Completed candidate sets are cached after every card, so a
+reload resumes by skipping them. Transient failures retry with bounded delays;
+the batch can be paused, resumed, or cancelled. Search may save up to 200
+provider results, while expensive thumbnail inspection and semantic ranking
+are capped at the best 24 metadata candidates for the active card.
+
 ## Analysis and ranking
 
 - deterministic canvas saliency is always available;
@@ -66,5 +86,6 @@ pnpm test
 pnpm run test:server
 ```
 
-See `AUTO_FRAME_CALIBRATION.md` for measured results and
+See `CALIBRATION_RUNBOOK.md` for checkpoints and live-run gates,
+`AUTO_FRAME_CALIBRATION.md` for measured smoke results, and
 `IMPLEMENTATION_PLAN.md` for the full acceptance contract and deferred scope.

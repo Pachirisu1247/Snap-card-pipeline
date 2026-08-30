@@ -54,3 +54,9 @@ venv/
 !sample_assets/logos/
 !sample_assets/logos/**
 sample_assets/logos/cropped/
+
+# Art Desk local runtime data (keys, calibration evidence, and search cache)
+art_intake/data/settings.local.json
+art_intake/data/calibration-session.json
+art_intake/data/candidates/
+art_intake/cache/

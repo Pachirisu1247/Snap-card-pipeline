@@ -14,6 +14,14 @@ textarea { min-height:74px; resize:vertical; } input[type="range"] { padding:0; 
 .header-status,.button-row,.queue-actions { display:flex; flex-wrap:wrap; gap:8px; }
 .workspace { display:grid; grid-template-columns:minmax(245px,300px) minmax(430px,1fr) minmax(275px,330px); gap:18px; max-width:1680px; margin:0 auto; padding:18px; }
 .panel { border:1px solid var(--line); border-radius:14px; background:linear-gradient(180deg,var(--panel-2),var(--panel)); box-shadow:0 16px 38px #0004; }
+.health-panel { grid-column:1/-1; display:grid; gap:12px; padding:15px 18px; }
+.health-heading,.health-footer { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.health-heading h2,.health-footer p { margin:0; }
+.health-metrics { display:grid; grid-template-columns:repeat(4,minmax(110px,1fr)); gap:8px; }
+.health-metrics>div { display:grid; gap:1px; padding:9px 11px; border:1px solid #454a5f; border-radius:8px; background:#151824; }
+.health-metrics strong { font-size:20px; font-variant-numeric:tabular-nums; }
+.health-metrics span,.health-footer { color:var(--muted); font-size:11px; }
+.health-metrics .bad { color:var(--danger); }
 .queue-panel,.review-panel { align-self:start; padding:17px; } .preview-panel { display:grid; place-items:center; min-height:780px; padding:20px; overflow:hidden; }
 .preview-heading,.analysis-heading,.section-heading,.scout-toolbar { display:flex; align-items:flex-start; justify-content:space-between; width:100%; gap:16px; }
 .preview-heading h2,.section-heading h2,.scout-toolbar h2 { margin:0; font-size:18px; text-transform:capitalize; }
@@ -42,6 +50,8 @@ textarea { min-height:74px; resize:vertical; } input[type="range"] { padding:0; 
 .scout-panel { grid-column:1/-1; padding:18px; } .scout-toolbar { align-items:end; }
 .scout-controls { display:grid; grid-template-columns:minmax(260px,1fr) 78px auto; gap:8px; width:min(100%,690px); }
 .search-setup { margin-top:14px; padding:12px; border:1px solid #806839; border-radius:9px; background:#302817; } .search-setup .button-row input { flex:1 1 300px; }
+.batch-bar { display:flex; align-items:center; justify-content:space-between; gap:14px; margin-top:14px; padding:11px 12px; border:1px solid #464c61; border-radius:9px; background:#171a26; }
+.batch-bar p { margin:2px 0 0; }
 .candidate-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(190px,1fr)); gap:12px; margin-top:16px; }
 .candidate-card { display:grid; grid-template-rows:210px auto; overflow:hidden; border:1px solid #464c61; border-radius:10px; background:#131620; }
 .candidate-card.selected { border-color:var(--accent); box-shadow:0 0 0 2px #f0ad4240; }
@@ -54,4 +64,4 @@ textarea { min-height:74px; resize:vertical; } input[type="range"] { padding:0; 
 .toast { position:fixed; right:22px; bottom:22px; z-index:30; max-width:420px; padding:12px 14px; border:1px solid #68708d; border-radius:9px; background:#262b3d; box-shadow:0 12px 34px #0008; }
 .toast.error { border-color:#d36b75; } .hidden { display:none!important; }
 @media (max-width:1120px) { .workspace { grid-template-columns:250px minmax(410px,1fr); } .review-panel { grid-column:1/-1; } }
-@media (max-width:760px) { .app-header { align-items:flex-start; flex-direction:column; } .workspace { grid-template-columns:1fr; padding:10px; } .preview-panel { grid-row:1; min-height:0; padding:14px; } .queue-panel { grid-row:2; } .review-panel { grid-column:auto; grid-row:3; } .scout-panel { grid-column:auto; grid-row:4; } .crop-controls,.scout-controls { grid-template-columns:1fr; } .scout-toolbar { align-items:stretch; flex-direction:column; } }
+@media (max-width:760px) { .app-header { align-items:flex-start; flex-direction:column; } .workspace { grid-template-columns:1fr; padding:10px; } .health-panel { grid-column:auto; } .health-metrics { grid-template-columns:1fr 1fr; } .health-heading,.health-footer,.batch-bar { align-items:stretch; flex-direction:column; } .preview-panel { grid-row:2; min-height:0; padding:14px; } .queue-panel { grid-row:3; } .review-panel { grid-column:auto; grid-row:4; } .scout-panel { grid-column:auto; grid-row:5; } .crop-controls,.scout-controls { grid-template-columns:1fr; } .scout-toolbar { align-items:stretch; flex-direction:column; } }

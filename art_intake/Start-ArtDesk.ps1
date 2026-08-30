@@ -41,6 +41,7 @@ $CandidateCacheDir = Join-Path $RuntimeRoot 'cache\candidates'
 $StatePath = Join-Path $DataDir 'state.json'
 $QueuePath = Join-Path $DataDir 'real_psd_test_queue.json'
 $SettingsPath = Join-Path $DataDir 'settings.local.json'
+$CalibrationPath = Join-Path $DataDir 'calibration-session.json'
 $Script:QueueIds = @{}
 
 function Ensure-Directory([string]$Path) {
@@ -377,6 +378,164 @@ function Get-PropertyValue($Object, [string[]]$Paths) {
     return $null
 }
 
+function Get-CalibrationSession {
+    if (-not (Test-Path -LiteralPath $CalibrationPath)) {
+        $created = [pscustomobject]@{
+            version = 1; session_id = [Guid]::NewGuid().ToString('N'); target_count = $Script:QueueIds.Count
+            started_at = [DateTime]::UtcNow.ToString('o'); updated_at = [DateTime]::UtcNow.ToString('o')
+            cards = [pscustomobject]@{}
+        }
+        Save-JsonAtomic $CalibrationPath $created 30
+        return $created
+    }
+    try { $session = Get-Content -LiteralPath $CalibrationPath -Raw | ConvertFrom-Json }
+    catch { throw 'The local calibration session is not valid JSON.' }
+    if ($null -eq $session.cards) { $session | Add-Member -Force NoteProperty cards ([pscustomobject]@{}) }
+    $session.version = 1; $session.target_count = $Script:QueueIds.Count
+    return $session
+}
+
+function Save-CalibrationSession($Session) {
+    $Session.version = 1; $Session.target_count = $Script:QueueIds.Count; $Session.updated_at = [DateTime]::UtcNow.ToString('o')
+    Save-JsonAtomic $CalibrationPath $Session 30
+}
+
+function Get-CalibrationCard($Session, [string]$CardId) {
+    $property = $Session.cards.PSObject.Properties[$CardId]
+    if ($null -eq $property) { return $null }
+    return $property.Value
+}
+
+function New-CalibrationCard([string]$CardId) {
+    return [pscustomobject]@{
+        card_id = $CardId; analysis_count = 0; baseline_crop = $null; baseline_confidence = $null
+        confidence_band = 'unknown'; latest_analysis = $null; fallback = $false; providers = @()
+        final_crop = $null; status = 'unreviewed'; candidate_count = 0; provider_failures = 0
+        first_analyzed_at = $null; last_analyzed_at = $null; decided_at = $null; search_updated_at = $null
+    }
+}
+
+function Set-CalibrationCard($Session, [string]$CardId, $Card) {
+    $Session.cards | Add-Member -Force -NotePropertyName $CardId -NotePropertyValue $Card
+}
+
+function Get-ConfidenceBand($Confidence) {
+    $value = 0.0
+    if (-not [double]::TryParse([string]$Confidence, [ref]$value)) { return 'unknown' }
+    if ($value -ge 0.78) { return 'high' }
+    if ($value -ge 0.55) { return 'medium' }
+    return 'low'
+}
+
+function Record-CalibrationAnalysis([string]$CardId, $Crop, $Analysis) {
+    $session = Get-CalibrationSession; $card = Get-CalibrationCard $session $CardId
+    if ($null -eq $card) { $card = New-CalibrationCard $CardId }
+    $now = [DateTime]::UtcNow.ToString('o')
+    $confidence = Get-PropertyValue $Analysis @('solution.confidence', 'confidence')
+    if ($null -eq $confidence) { $confidence = Get-PropertyValue $Crop @('confidence') }
+    if ($null -eq $card.baseline_crop) {
+        $card.baseline_crop = $Crop; $card.baseline_confidence = $confidence
+        $card.confidence_band = Get-ConfidenceBand $confidence; $card.first_analyzed_at = $now
+    }
+    $card.analysis_count = [int]$card.analysis_count + 1; $card.latest_analysis = $Analysis; $card.last_analyzed_at = $now
+    $fallbackValue = Get-PropertyValue $Analysis @('fallback')
+    $card.fallback = [bool]$fallbackValue; $providers = Get-PropertyValue $Analysis @('providers')
+    $card.providers = if ($null -eq $providers) { @() } else { @($providers) }
+    Set-CalibrationCard $session $CardId $card; Save-CalibrationSession $session
+    return $session
+}
+
+function Record-CalibrationDecision([string]$CardId, [string]$Status, $Crop, $Analysis) {
+    $session = Get-CalibrationSession; $card = Get-CalibrationCard $session $CardId
+    if ($null -eq $card) { $card = New-CalibrationCard $CardId }
+    $card.status = $Status; $card.final_crop = $Crop; $card.decided_at = [DateTime]::UtcNow.ToString('o')
+    if ($null -ne $Analysis) { $card.latest_analysis = $Analysis }
+    Set-CalibrationCard $session $CardId $card; Save-CalibrationSession $session
+    return $session
+}
+
+function Record-CalibrationSearch([string]$CardId, [int]$CandidateCount, [bool]$Failed) {
+    $session = Get-CalibrationSession; $card = Get-CalibrationCard $session $CardId
+    if ($null -eq $card) { $card = New-CalibrationCard $CardId }
+    if ($Failed) { $card.provider_failures = [int]$card.provider_failures + 1 }
+    else { $card.candidate_count = $CandidateCount }
+    $card.search_updated_at = [DateTime]::UtcNow.ToString('o')
+    Set-CalibrationCard $session $CardId $card; Save-CalibrationSession $session
+    return $session
+}
+
+function Get-CandidateInventory {
+    $inventory = [pscustomobject]@{}
+    foreach ($cardId in @($Script:QueueIds.Keys)) {
+        $set = Get-CandidateSet ([string]$cardId)
+        if (@($set.candidates).Count -gt 0) {
+            $inventory | Add-Member -Force NoteProperty ([string]$cardId) ([pscustomobject]@{
+                count = @($set.candidates).Count; query = [string]$set.query; updated_at = $set.updated_at
+            })
+        }
+    }
+    return $inventory
+}
+
+function Get-CropDeltaData($Baseline, $Final) {
+    if ($null -eq $Baseline -or $null -eq $Final) { return $null }
+    $baseScale = [Math]::Max(0.01, [double](Get-PropertyValue $Baseline @('scale')))
+    $finalScale = [Math]::Max(0.01, [double](Get-PropertyValue $Final @('scale')))
+    $panX = [double](Get-PropertyValue $Final @('pan_x')) - [double](Get-PropertyValue $Baseline @('pan_x'))
+    $panY = [double](Get-PropertyValue $Final @('pan_y')) - [double](Get-PropertyValue $Baseline @('pan_y'))
+    $scalePercent = [Math]::Abs($finalScale / $baseScale - 1) * 100
+    $panDistance = [Math]::Sqrt($panX * $panX + $panY * $panY)
+    return [pscustomobject]@{
+        scale_percent = [Math]::Round($scalePercent, 3); pan_distance = [Math]::Round($panDistance, 3)
+        score = [Math]::Round($scalePercent + $panDistance * 0.5, 3)
+    }
+}
+
+function Get-CalibrationOutcome($Card) {
+    if ($null -eq $Card -or [string]$Card.status -notin @('approved', 'needs_review', 'skipped')) { return 'unreviewed' }
+    if ([string]$Card.status -eq 'skipped') { return 'skipped' }
+    $delta = Get-CropDeltaData $Card.baseline_crop $Card.final_crop
+    if ($null -eq $delta) { if ([string]$Card.status -eq 'needs_review') { return 'needs_review' }; return 'unknown' }
+    if ([string]$Card.status -eq 'needs_review') { return 'needs_review' }
+    $manual = [bool](Get-PropertyValue $Card.final_crop @('manual_revision'))
+    if ([string]$Card.confidence_band -ne 'low' -and [string]$Card.confidence_band -ne 'unknown' -and -not $manual -and $delta.score -le 0.5) { return 'zero_touch' }
+    if ($delta.score -le 12) { return 'minor_adjustment' }
+    return 'major_adjustment'
+}
+
+function Get-CalibrationReport {
+    $session = Get-CalibrationSession; $rows = [Collections.Generic.List[object]]::new()
+    foreach ($item in $queue) {
+        $cardId = [string]$item.id; $card = Get-CalibrationCard $session $cardId
+        if ($null -eq $card) { $card = New-CalibrationCard $cardId }
+        $delta = Get-CropDeltaData $card.baseline_crop $card.final_crop
+        $rows.Add([pscustomobject]@{
+            card_id = $cardId; status = [string]$card.status; confidence_band = [string]$card.confidence_band
+            outcome = Get-CalibrationOutcome $card; fallback = [bool]$card.fallback
+            delta_score = if ($delta) { $delta.score } else { $null }
+            scale_percent = if ($delta) { $delta.scale_percent } else { $null }
+            pan_distance = if ($delta) { $delta.pan_distance } else { $null }
+            critical_retained = Get-PropertyValue $card.latest_analysis @('solution.evaluation.critical_retained')
+            critical_occlusion = Get-PropertyValue $card.latest_analysis @('solution.evaluation.critical_occlusion')
+            candidate_count = [int]$card.candidate_count; provider_failures = [int]$card.provider_failures
+        })
+    }
+    $rowArray = @($rows); $reviewed = @($rowArray | Where-Object { $_.outcome -ne 'unreviewed' })
+    $eligible = @($reviewed | Where-Object { $_.confidence_band -notin @('low', 'unknown') -and $_.outcome -in @('zero_touch', 'minor_adjustment', 'major_adjustment') })
+    $analyzed = @($rowArray | Where-Object { $_.confidence_band -ne 'unknown' })
+    $zeroTouch = @($eligible | Where-Object { $_.outcome -eq 'zero_touch' }).Count
+    $fallbackCount = @($analyzed | Where-Object { $_.fallback }).Count
+    return [pscustomobject]@{
+        generated_at = [DateTime]::UtcNow.ToString('o'); session = $session
+        metrics = [pscustomobject]@{
+            target_count = $rowArray.Count; reviewed_count = $reviewed.Count; analyzed_count = $analyzed.Count
+            zero_touch_rate = if ($eligible.Count) { [Math]::Round($zeroTouch / $eligible.Count, 4) } else { $null }
+            fallback_rate = if ($analyzed.Count) { [Math]::Round($fallbackCount / $analyzed.Count, 4) } else { $null }
+        }
+        rows = $rowArray
+    }
+}
+
 function ConvertFrom-BraveImageResults($Response) {
     $results = @($Response.results)
     $normalized = [Collections.Generic.List[object]]::new()
@@ -473,6 +632,12 @@ function Write-Json($Stream, $Value, [int]$StatusCode = 200) {
     Write-Response $Stream $StatusCode 'application/json; charset=utf-8' ([Text.Encoding]::UTF8.GetBytes($json))
 }
 
+function Write-Download($Stream, [string]$ContentType, [string]$Filename, [byte[]]$Bytes) {
+    $header = "HTTP/1.1 200 OK`r`nContent-Type: $ContentType`r`nContent-Disposition: attachment; filename=`"$Filename`"`r`nContent-Length: $($Bytes.Length)`r`nCache-Control: no-store`r`nX-Content-Type-Options: nosniff`r`nConnection: close`r`n`r`n"
+    $headerBytes = [Text.Encoding]::ASCII.GetBytes($header); $Stream.Write($headerBytes, 0, $headerBytes.Length)
+    $Stream.Write($Bytes, 0, $Bytes.Length); $Stream.Flush()
+}
+
 function Write-Text($Stream, [int]$StatusCode, [string]$Text) {
     Write-Response $Stream $StatusCode 'text/plain; charset=utf-8' ([Text.Encoding]::UTF8.GetBytes($Text))
 }
@@ -547,12 +712,22 @@ try {
                 $searchConfigured = -not [string]::IsNullOrWhiteSpace((Get-BraveApiKey)) -or -not [string]::IsNullOrWhiteSpace([string]$env:ART_DESK_MOCK_SEARCH_RESPONSE)
                 Write-Json $stream ([pscustomobject]@{
                     queue = $queue; state = $state.cards; template = $template
+                    calibration = Get-CalibrationSession; candidate_inventory = Get-CandidateInventory
                     queue_kind = 'Art Desk 2 - randomized real generated-PSD calibration queue'
                     capabilities = [pscustomobject]@{
                         analysis_version = 2; advanced_ai = $true; search_configured = $searchConfigured
                         search_provider = 'brave-images-v1'; https_backend = if ($Script:PythonPath) { 'python-openssl' } else { 'windows-native' }
                     }
                 }); continue
+            }
+            if ($request.Method -eq 'GET' -and $path -eq '/api/calibration-report.json') {
+                $json = ConvertTo-Json -InputObject (Get-CalibrationReport) -Depth 30
+                Write-Download $stream 'application/json; charset=utf-8' 'art-desk-calibration.json' ([Text.Encoding]::UTF8.GetBytes($json)); continue
+            }
+            if ($request.Method -eq 'GET' -and $path -eq '/api/calibration-report.csv') {
+                $report = Get-CalibrationReport
+                $csv = @($report.rows | ConvertTo-Csv -NoTypeInformation) -join "`r`n"
+                Write-Download $stream 'text/csv; charset=utf-8' 'art-desk-calibration.csv' ([Text.Encoding]::UTF8.GetBytes("$csv`r`n")); continue
             }
             if ($request.Method -eq 'GET' -and $path.StartsWith('/psd/')) {
                 $cardId = $path.Substring(5); Assert-CardId $cardId; $psdPath = Join-Path $CardPsdDir "$cardId.psd"
@@ -580,12 +755,17 @@ try {
             }
             if ($request.Method -eq 'POST' -and $path -eq '/api/search-candidates') {
                 $payload = Read-JsonBody $request; $cardId = [string]$payload.card_id; Assert-CardId $cardId
-                $query = ([string]$payload.query).Trim(); if ($query.Length -lt 2 -or $query.Length -gt 240) { throw 'Search query must be between 2 and 240 characters.' }
-                $count = [int]$payload.count; if ($count -lt 6) { $count = 6 }; if ($count -gt 100) { $count = 100 }
-                $response = Invoke-BraveImageSearch $query $count; $candidates = @(ConvertFrom-BraveImageResults $response | Select-Object -First $count)
+                $query = ([string]$payload.query).Trim(); if ($query.Length -lt 2 -or $query.Length -gt 400) { throw 'Search query must be between 2 and 400 characters.' }
+                $count = [int]$payload.count; if ($count -lt 1) { $count = 1 }; if ($count -gt 200) { $count = 200 }
+                try { $response = Invoke-BraveImageSearch $query $count; $candidates = @(ConvertFrom-BraveImageResults $response | Select-Object -First $count) }
+                catch { Record-CalibrationSearch $cardId 0 $true | Out-Null; throw }
                 $set = [pscustomobject]@{ version = 1; card_id = $cardId; query = $query; updated_at = [DateTime]::UtcNow.ToString('o'); candidates = $candidates }
                 Save-JsonAtomic (Get-CandidateFile $cardId) $set 12
-                Write-Json $stream ([pscustomobject]@{ ok = $true; candidates = $candidates; query = $query }); continue
+                $calibration = Record-CalibrationSearch $cardId @($candidates).Count $false
+                Write-Json $stream ([pscustomobject]@{ ok = $true; candidates = $candidates; query = $query; calibration = $calibration }); continue
+            }
+            if ($request.Method -eq 'GET' -and $path -eq '/api/calibration') {
+                Write-Json $stream ([pscustomobject]@{ ok = $true; calibration = Get-CalibrationSession; candidate_inventory = Get-CandidateInventory }); continue
             }
             if ($request.Method -eq 'GET' -and $path.StartsWith('/api/candidates/')) {
                 $cardId = $path.Substring(16); $set = Get-CandidateSet $cardId
@@ -625,7 +805,8 @@ try {
                     crop = $payload.crop; analysis = $payload.analysis; note = [string]$existing.note; updated_at = [DateTime]::UtcNow.ToString('o')
                 }
                 Set-CardRecord $state $cardId $record; Save-State $state
-                Write-Json $stream ([pscustomobject]@{ ok = $true; record = $record }); continue
+                $calibration = Record-CalibrationAnalysis $cardId $payload.crop $payload.analysis
+                Write-Json $stream ([pscustomobject]@{ ok = $true; record = $record; calibration = $calibration }); continue
             }
             if ($request.Method -eq 'POST' -and $path -eq '/api/decision') {
                 $payload = Read-JsonBody $request; $cardId = [string]$payload.card_id; Assert-CardId $cardId; $status = [string]$payload.status
@@ -641,7 +822,8 @@ try {
                     note = [string]$payload.note; updated_at = [DateTime]::UtcNow.ToString('o')
                 }
                 Set-CardRecord $state $cardId $record; Save-State $state
-                Write-Json $stream ([pscustomobject]@{ ok = $true; record = $record }); continue
+                $calibration = Record-CalibrationDecision $cardId $status $record.crop $record.analysis
+                Write-Json $stream ([pscustomobject]@{ ok = $true; record = $record; calibration = $calibration }); continue
             }
             if ($request.Method -eq 'POST' -and $path -eq '/api/upload-image') {
                 $payload = Read-JsonBody $request; $cardId = [string]$payload.card_id; Assert-CardId $cardId
@@ -681,7 +863,9 @@ try {
 
             Write-Text $stream 404 'Not found.'
         } catch {
-            try { Write-Json $stream ([pscustomobject]@{ ok = $false; error = $_.Exception.Message }) 400 } catch {}
+            $message = $_.Exception.Message
+            $statusCode = if ($message -match '(?i)\b429\b|rate.?limit|too many requests') { 429 } elseif ($message -match '(?i)\b50[0234]\b|temporar|timeout') { 500 } else { 400 }
+            try { Write-Json $stream ([pscustomobject]@{ ok = $false; error = $message }) $statusCode } catch {}
         } finally { $stream.Dispose(); $client.Close() }
     }
 } finally { $listener.Stop() }

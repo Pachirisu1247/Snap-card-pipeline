@@ -438,3 +438,23 @@ rewriting the rest.
 Final PSD write-back will consume the same stable selected-art and crop record
 after this phase proves framing quality. Photoshop Rules work and physical
 board/counter design remain independent later milestones.
+
+## 12. Calibration execution extension
+
+The implementation now includes the operational layer needed to execute the
+48-card benchmark without losing or hand-transcribing evidence:
+
+- a separate, ignored, atomically saved calibration session;
+- immutable first-auto-frame baselines and automatic final-decision capture;
+- confidence, fallback, crop-delta, zero-touch, and hard-safety reporting;
+- server-backed JSON and CSV downloads;
+- 12-card checkpoints with explicit pilot and maturity gates;
+- serial, resumable Art Scout batch discovery with cached-card skipping,
+  bounded transient retries, pause/resume/cancel, and per-card failure counts;
+- a 24-thumbnail deep-analysis budget selected by deterministic metadata score;
+- isolated restart and provider-failure integration coverage.
+
+The exact run procedure and stop/revise conditions are maintained in
+`CALIBRATION_RUNBOOK.md`. A live Brave key and human aesthetic decisions are
+still required to produce an honest 48-card zero-touch result; mock-provider
+and software tests cannot substitute for that review evidence.
