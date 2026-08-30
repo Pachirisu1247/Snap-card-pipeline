@@ -60,12 +60,13 @@ are capped at the best 24 metadata candidates for the active card.
 - crop scoring protects Cost, Power, logo, and Rules occlusion regions;
 - perceptual hashes remove near-duplicate search results.
 
-Auto-frame contract version 3 uses the `snap-loose-v1` profile. It favors
-breathing room and environment over aggressive subject enlargement, penalizes
-foreground clipping and excessive pan, and explicitly marks source art that
-forces a tight crop as low confidence. Exact SHA-256 matches across cards are
-blocked before selection; legacy duplicate files remain visible as a repair
-warning and cannot be approved.
+Auto-frame contract version 4 uses the `snap-extended-v1` profile. It can place
+the sharp source below cover size while Photopea builds a separate softened,
+edge-to-edge backdrop from the same image. This creates visible breathing room
+without blank canvas, and cached slider changes continue to move and resize the
+sharp plate independently. Exact SHA-256 matches across cards are blocked
+before selection; legacy duplicate files remain visible as a repair warning
+and cannot be approved.
 
 Models run in a worker and are cached by the browser after first use. The first
 analysis/search-ranking run therefore takes longer than later runs.

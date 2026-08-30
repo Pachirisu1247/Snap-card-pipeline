@@ -1,4 +1,5 @@
 const WORK_ART_PREFIX = '__ART_DESK_WORK_ART__';
+const WORK_BACKDROP_PREFIX = '__ART_DESK_WORK_BACKDROP__';
 const IMPORT_MARKER = '__ART_DESK_IMPORT__';
 
 export class PhotopeaClient {
@@ -42,8 +43,8 @@ export class PhotopeaClient {
     if (!this.ready || !this.window) throw new Error('Photopea is still loading.');
     if (!card?.id || !artUrl) throw new Error('Choose artwork before creating a PSD preview.');
     if (this.isBusy()) throw new Error('Photopea is already rendering a preview.');
-    const normalizedCrop = { scale: Number(crop.scale), x: Number(crop.pan_x), y: Number(crop.pan_y) };
-    const key = `${card.id}|${artKey}`;
+    const normalizedCrop = normalizePhotopeaCrop(crop);
+    const key = photopeaCompositionKey(card.id, artKey, normalizedCrop);
 
     if (this.workCache?.key === key) {
       const request = { ...this.workCache, mode, format: mode === 'interactive' ? 'jpg:0.88' : 'png', mime: mode === 'interactive' ? 'image/jpeg' : 'image/png', initial: false };
@@ -142,7 +143,38 @@ export class PhotopeaClient {
   exportImportedLayer() {
     const crop = this.pendingCrop;
     const request = this.workRequest;
-    this.send(`(function(){function n(value){return value&&value.value!==undefined?Number(value.value):Number(value)}function findByName(layers,name){for(var i=0;i<layers.length;i++){var layer=layers[i];if(layer.name===name)return layer;try{if(layer.layers){var hit=findByName(layer.layers,name);if(hit)return hit}}catch(ignore){}}return null}try{var doc=app.activeDocument,newArt=findByName(doc.layers,${JSON.stringify(IMPORT_MARKER)}),oldArt=findByName(doc.layers,'Background');if(!newArt||!oldArt||newArt===oldArt)throw Error('The real PSD artwork layer was not found');var artBounds=newArt.bounds,oldBounds=oldArt.bounds,artWidth=n(artBounds[2])-n(artBounds[0]),artHeight=n(artBounds[3])-n(artBounds[1]),boxWidth=n(oldBounds[2])-n(oldBounds[0]),boxHeight=n(oldBounds[3])-n(oldBounds[1]);if(!(artWidth>0&&artHeight>0&&boxWidth>0&&boxHeight>0))throw Error('The selected image has invalid bounds');var scale=Math.max(boxWidth/artWidth,boxHeight/artHeight)*${crop.scale}*100;newArt.resize(scale,scale);artBounds=newArt.bounds;newArt.translate(n(oldBounds[0])+boxWidth/2-(n(artBounds[0])+(n(artBounds[2])-n(artBounds[0]))/2)+${crop.x}/100*boxWidth,n(oldBounds[1])+boxHeight/2-(n(artBounds[1])+(n(artBounds[3])-n(artBounds[1]))/2)+${crop.y}/100*boxHeight);newArt.move(oldArt,ElementPlacement.PLACEBEFORE);newArt.grouped=true;oldArt.visible=false;newArt.name=${JSON.stringify(WORK_ART_PREFIX)}+'|'+artWidth+'|'+artHeight;doc.name=${JSON.stringify(request.docName)};doc.saveToOE(${JSON.stringify(request.format)})}catch(error){app.echoToOE('ARTDESK:DIRECTERR:'+(error&&error.message?error.message:String(error)))}})()`);
+    this.send(`(function(){
+      function n(value){return value&&value.value!==undefined?Number(value.value):Number(value)}
+      function findByName(layers,name){for(var i=0;i<layers.length;i++){var layer=layers[i];if(layer.name===name)return layer;try{if(layer.layers){var hit=findByName(layer.layers,name);if(hit)return hit}}catch(ignore){}}return null}
+      function centerLayer(layer,bounds,boxWidth,boxHeight,panX,panY){var b=layer.bounds;layer.translate(n(bounds[0])+boxWidth/2-(n(b[0])+(n(b[2])-n(b[0]))/2)+panX/100*boxWidth,n(bounds[1])+boxHeight/2-(n(b[1])+(n(b[3])-n(b[1]))/2)+panY/100*boxHeight)}
+      function revealFeatheredLayer(doc,layer,radius){try{app.activeDocument=doc;doc.activeLayer=layer;var b=layer.bounds,left=n(b[0]),top=n(b[1]),right=n(b[2]),bottom=n(b[3]);doc.selection.select([[left,top],[right,top],[right,bottom],[left,bottom]]);doc.selection.feather(radius);var make=charIDToTypeID('Mk  '),desc=new ActionDescriptor(),ref=new ActionReference();desc.putClass(charIDToTypeID('Nw  '),charIDToTypeID('Chnl'));ref.putEnumerated(charIDToTypeID('Chnl'),charIDToTypeID('Chnl'),charIDToTypeID('Msk '));desc.putReference(charIDToTypeID('At  '),ref);desc.putEnumerated(charIDToTypeID('Usng'),charIDToTypeID('UsrM'),charIDToTypeID('RvlS'));executeAction(make,desc,DialogModes.NO);doc.selection.deselect()}catch(ignore){try{doc.selection.deselect()}catch(ignoreAgain){}}}
+      try{
+        var doc=app.activeDocument,newArt=findByName(doc.layers,${JSON.stringify(IMPORT_MARKER)}),oldArt=findByName(doc.layers,'Background');
+        if(!newArt||!oldArt||newArt===oldArt)throw Error('The real PSD artwork layer was not found');
+        var artBounds=newArt.bounds,oldBounds=oldArt.bounds,artWidth=n(artBounds[2])-n(artBounds[0]),artHeight=n(artBounds[3])-n(artBounds[1]),boxWidth=n(oldBounds[2])-n(oldBounds[0]),boxHeight=n(oldBounds[3])-n(oldBounds[1]);
+        if(!(artWidth>0&&artHeight>0&&boxWidth>0&&boxHeight>0))throw Error('The selected image has invalid bounds');
+        var cover=Math.max(boxWidth/artWidth,boxHeight/artHeight),backdrop=null;
+        if(${JSON.stringify(crop.backgroundMode)}==='extend'){
+          backdrop=newArt.duplicate();
+          backdrop.name=${JSON.stringify(WORK_BACKDROP_PREFIX)};
+          backdrop.resize(cover*112,cover*112);
+          centerLayer(backdrop,oldBounds,boxWidth,boxHeight,0,0);
+          backdrop.move(oldArt,ElementPlacement.PLACEBEFORE);
+          backdrop.grouped=true;
+          try{doc.activeLayer=backdrop;backdrop.rasterize(RasterizeType.ENTIRELAYER);backdrop.applyGaussianBlur(Math.max(18,Math.min(boxWidth,boxHeight)*0.035))}catch(ignore){}
+        }
+        newArt.resize(cover*${crop.scale}*100,cover*${crop.scale}*100);
+        centerLayer(newArt,oldBounds,boxWidth,boxHeight,${crop.x},${crop.y});
+        newArt.move(backdrop||oldArt,ElementPlacement.PLACEBEFORE);
+        newArt.grouped=true;
+        if(backdrop)revealFeatheredLayer(doc,newArt,Math.max(12,Math.min(boxWidth,boxHeight)*${crop.feather}));
+        oldArt.visible=false;
+        newArt.name=${JSON.stringify(WORK_ART_PREFIX)}+'|'+artWidth+'|'+artHeight;
+        doc.name=${JSON.stringify(request.docName)};
+        app.activeDocument=doc;
+        doc.saveToOE(${JSON.stringify(request.format)})
+      }catch(error){app.echoToOE('ARTDESK:DIRECTERR:'+(error&&error.message?error.message:String(error)))}
+    })()`);
   }
 
   handleMessage(event) {
@@ -228,4 +260,25 @@ function dataUrlFromBuffer(buffer, mime) {
   const bytes = new Uint8Array(buffer);
   for (let index = 0; index < bytes.length; index += 0x8000) text += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
   return `data:${mime};base64,${btoa(text)}`;
+}
+
+export function normalizePhotopeaCrop(crop = {}) {
+  const scale = finite(crop.scale, 0.5, 3, 1);
+  const backgroundMode = crop.background_mode === 'extend' || scale < 1 ? 'extend' : 'cover';
+  return {
+    scale,
+    x: finite(crop.pan_x, -100, 100, 0),
+    y: finite(crop.pan_y, -100, 100, 0),
+    backgroundMode,
+    feather: backgroundMode === 'extend' ? finite(crop.extension_feather, 0.025, 0.12, 0.055) : 0,
+  };
+}
+
+export function photopeaCompositionKey(cardId, artKey, crop) {
+  return `${cardId}|${artKey}|${crop?.backgroundMode === 'extend' ? 'extend' : 'cover'}`;
+}
+
+function finite(value, min, max, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.min(max, Math.max(min, number)) : fallback;
 }

@@ -25,20 +25,23 @@ function analysis(overrides = {}) {
   };
 }
 
-test('solver is deterministic and returns a legal cover crop', () => {
+test('solver is deterministic and returns a legal extended composition', () => {
   const input = analysis();
   const first = solveCrop(input);
   const second = solveCrop(structuredClone(input));
   assert.deepEqual(first, second);
   assert.equal(first.crop.mode, 'auto');
-  assert.equal(first.crop.analysis_version, 3);
-  assert.equal(first.crop.framing_profile, 'snap-loose-v1');
+  assert.equal(first.crop.analysis_version, 4);
+  assert.equal(first.crop.framing_profile, 'snap-extended-v1');
+  assert.equal(first.crop.background_mode, 'extend');
+  assert.ok(first.crop.scale < 1);
   assert.ok(first.proposal_count >= 27);
 
   const placement = placementForCrop(first.crop, input.image);
-  assert.ok(placement.x <= 0 && placement.y <= 0);
+  assert.ok(placement.x <= 0);
   assert.ok(placement.x + placement.width >= ART_VIEWPORT.width - 0.001);
-  assert.ok(placement.y + placement.height >= ART_VIEWPORT.height - 0.001);
+  assert.ok(placement.y >= 0);
+  assert.ok(placement.y + placement.height <= ART_VIEWPORT.height + 0.001);
 });
 
 test('well-supported safe crop can receive high confidence', () => {
@@ -62,13 +65,13 @@ test('a heavily clipped foreground can never be high confidence', () => {
     foreground: { box: { x: 0.1, y: 0.02, width: 0.8, height: 0.96 }, centroid: { x: 0.5, y: 0.45 }, confidence: 0.97 },
     critical_regions: [{ box: { x: 0.35, y: 0.08, width: 0.3, height: 0.2 }, weight: 2 }],
   });
-  const result = solveCrop(input);
+  const result = solveCrop(input, { scales: [1.5] });
   assert.ok(result.evaluation.foreground_retained < 0.92);
   assert.ok(result.confidence <= 0.77);
   assert.notEqual(confidenceBand(result.confidence), 'high');
 });
 
-test('a narrow portrait that forces a tight crop is downgraded and explained', () => {
+test('a narrow portrait receives visibly wider fit-and-extend framing', () => {
   const result = solveCrop(analysis({
     image: { width: 825, height: 1275 },
     foreground: {
@@ -78,10 +81,13 @@ test('a narrow portrait that forces a tight crop is downgraded and explained', (
     },
     critical_regions: [{ box: { x: 0.343, y: 0.128, width: 0.37, height: 0.254 }, weight: 1.35 }],
   }));
-  assert.equal(result.crop.scale, 1);
-  assert.equal(result.band, 'low');
-  assert.ok(result.evaluation.foreground_retained < 0.86);
-  assert.ok(result.reasons.includes('source forces a tight crop—prefer wider dynamic art'));
+  assert.equal(result.crop.scale, 0.76);
+  assert.equal(result.crop.background_mode, 'extend');
+  assert.equal(result.crop.extension_feather, 0.055);
+  assert.ok(result.evaluation.foreground_retained >= 0.98);
+  assert.ok(result.evaluation.extension_fraction >= 0.2);
+  assert.ok(result.reasons.includes('soft extended backdrop enables wider framing'));
+  assert.ok(result.reasons.includes('subject plate reduced to 76%'));
   assert.ok(Math.abs(result.crop.pan_y) <= 15);
 });
 

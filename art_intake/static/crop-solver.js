@@ -1,8 +1,11 @@
 export const ART_VIEWPORT = Object.freeze({ width: 1792, height: 2006 });
 export const CONFIDENCE_THRESHOLDS = Object.freeze({ high: 0.78, medium: 0.55 });
-export const FRAMING_PROFILE = 'snap-loose-v1';
+export const FRAMING_PROFILE = 'snap-extended-v1';
 
-const SCALE_STEPS = Object.freeze([1, 1.06, 1.12, 1.22, 1.34, 1.5, 1.72, 2]);
+// Values below 1 are legal because Photopea renders a softened, edge-to-edge
+// backdrop behind the sharp source layer. That is the only way to make a
+// subject genuinely smaller without exposing empty canvas.
+const SCALE_STEPS = Object.freeze([0.76, 0.82, 0.88, 0.94, 1, 1.08, 1.18, 1.32, 1.5, 1.72, 2]);
 const OCCLUSIONS = Object.freeze([
   { id: 'cost', x: 0, y: 0, width: 0.24, height: 0.19, weight: 1.55 },
   { id: 'power', x: 0.76, y: 0, width: 0.24, height: 0.19, weight: 1.55 },
@@ -44,8 +47,10 @@ export function solveCrop(analysis, options = {}) {
       pan_x: round(best.crop.pan_x, 0),
       pan_y: round(best.crop.pan_y, 0),
       mode: 'auto',
-      analysis_version: 3,
+      analysis_version: 4,
       framing_profile: FRAMING_PROFILE,
+      background_mode: best.crop.background_mode,
+      extension_feather: best.crop.background_mode === 'extend' ? 0.055 : 0,
       confidence: round(confidence, 3),
       manual_revision: false,
     },
@@ -68,10 +73,11 @@ export function cropForAnchor(imageInput, viewport, scale, source, target) {
   const centerY = (viewport.height - drawHeight) / 2;
   const desiredX = target.x * viewport.width - source.x * drawWidth;
   const desiredY = target.y * viewport.height - source.y * drawHeight;
-  const legalX = clamp(desiredX, viewport.width - drawWidth, 0);
-  const legalY = clamp(desiredY, viewport.height - drawHeight, 0);
+  const legalX = legalPosition(desiredX, viewport.width, drawWidth);
+  const legalY = legalPosition(desiredY, viewport.height, drawHeight);
   return {
     scale,
+    background_mode: scale < 1 ? 'extend' : 'cover',
     pan_x: clamp((legalX - centerX) / viewport.width * 100, -100, 100),
     pan_y: clamp((legalY - centerY) / viewport.height * 100, -100, 100),
   };
@@ -85,8 +91,8 @@ export function placementForCrop(crop, imageInput, viewport = ART_VIEWPORT) {
   const unclampedX = (viewport.width - drawWidth) / 2 + Number(crop.pan_x) / 100 * viewport.width;
   const unclampedY = (viewport.height - drawHeight) / 2 + Number(crop.pan_y) / 100 * viewport.height;
   return {
-    x: clamp(unclampedX, viewport.width - drawWidth, 0),
-    y: clamp(unclampedY, viewport.height - drawHeight, 0),
+    x: legalPosition(unclampedX, viewport.width, drawWidth),
+    y: legalPosition(unclampedY, viewport.height, drawHeight),
     width: drawWidth,
     height: drawHeight,
   };
@@ -143,8 +149,8 @@ function scoreCrop(crop, image, foreground, critical, viewport) {
     penalty += targetDistance * 115 / Math.max(0.35, region.weight);
   }
 
-  if (normalizedForegroundHeight < 0.5) penalty += (0.5 - normalizedForegroundHeight) * 480;
-  if (normalizedForegroundHeight > 1.14) penalty += (normalizedForegroundHeight - 1.14) * 520;
+  if (normalizedForegroundHeight < 0.58) penalty += (0.58 - normalizedForegroundHeight) * 620;
+  if (normalizedForegroundHeight > 0.9) penalty += (normalizedForegroundHeight - 0.9) * 520;
 
   const projectedCentroid = {
     x: placementForCrop(crop, image, viewport).x + foreground.centroid.x * placementForCrop(crop, image, viewport).width,
@@ -154,8 +160,11 @@ function scoreCrop(crop, image, foreground, critical, viewport) {
   penalty += centroidDistance * 90;
   const placement = placementForCrop(crop, image, viewport);
   const sourceRetained = clamp(viewport.width * viewport.height / Math.max(1, placement.width * placement.height), 0, 1);
+  const visiblePlate = intersect(placement, { x: 0, y: 0, width: viewport.width, height: viewport.height });
+  const extensionFraction = clamp(1 - visiblePlate.width * visiblePlate.height / (viewport.width * viewport.height), 0, 1);
   penalty += (1 - sourceRetained) * 120;
   penalty += Math.max(0, crop.scale - 1) * 150;
+  penalty += extensionFraction * 65;
   penalty += Math.hypot(crop.pan_x, crop.pan_y) * 1.6;
 
   return {
@@ -165,6 +174,7 @@ function scoreCrop(crop, image, foreground, critical, viewport) {
     critical_occlusion: round(criticalOcclusion, 4),
     subject_height: round(normalizedForegroundHeight, 4),
     source_retained: round(sourceRetained, 4),
+    extension_fraction: round(extensionFraction, 4),
   };
 }
 
@@ -194,7 +204,8 @@ function calculateConfidence(analysis, best, second) {
   const margin = clamp((second.penalty - best.penalty) / Math.max(30, second.penalty), 0, 1);
   const fallbackPenalty = analysis?.fallback ? 0.1 : 0;
   const flagPenalty = Math.min(0.18, (analysis?.quality_flags || []).length * 0.035);
-  let confidence = clamp(0.21 * providerConfidence + 0.36 * retention + 0.16 * occlusionQuality + 0.08 * margin + 0.1 * contextQuality + agreementBonus - fallbackPenalty - flagPenalty, 0.05, 0.98);
+  const extensionPenalty = clamp(best.extension_fraction, 0, 1) * 0.14;
+  let confidence = clamp(0.21 * providerConfidence + 0.36 * retention + 0.16 * occlusionQuality + 0.08 * margin + 0.1 * contextQuality + agreementBonus - fallbackPenalty - flagPenalty - extensionPenalty, 0.05, 0.98);
 
   // A numerical provider score cannot overrule an unsafe crop. High confidence
   // is reserved for crops that actually retain the detected subject and keep
@@ -202,7 +213,7 @@ function calculateConfidence(analysis, best, second) {
   // face/head region similarly requires human review.
   if (!(analysis?.critical_regions || []).length) confidence = Math.min(confidence, 0.68);
   if (best.foreground_retained < 0.92 || best.critical_retained < 0.98 || best.critical_occlusion > 0.05) confidence = Math.min(confidence, 0.77);
-  if (best.foreground_retained < 0.86 || best.subject_height > 1.2 || best.critical_retained < 0.9 || best.critical_occlusion > 0.14) confidence = Math.min(confidence, 0.54);
+  if (best.foreground_retained < 0.86 || best.subject_height > 1.12 || best.critical_retained < 0.9 || best.critical_occlusion > 0.14) confidence = Math.min(confidence, 0.54);
   return confidence;
 }
 
@@ -213,8 +224,10 @@ function buildReasons(analysis, best, confidence) {
   if (evaluation.critical_occlusion <= 0.03) reasons.push('clear of card overlays');
   if (evaluation.foreground_retained >= 0.96) reasons.push('foreground retained');
   if (evaluation.source_retained >= 0.82) reasons.push('scene context retained');
-  if (evaluation.foreground_retained < 0.86 || evaluation.subject_height > 1.2) reasons.push('source forces a tight crop—prefer wider dynamic art');
-  if (best.crop.scale <= 1.16) reasons.push('minimal extra zoom');
+  if (best.crop.background_mode === 'extend') reasons.push('soft extended backdrop enables wider framing');
+  if (evaluation.foreground_retained < 0.86 || evaluation.subject_height > 1.12) reasons.push('source still forces a tight crop—prefer wider dynamic art');
+  if (best.crop.scale < 1) reasons.push(`subject plate reduced to ${Math.round(best.crop.scale * 100)}%`);
+  else if (best.crop.scale <= 1.16) reasons.push('minimal extra zoom');
   if ((analysis?.critical_regions || []).length === 0) reasons.push('no reliable face/head box');
   if (analysis?.fallback) reasons.push('local saliency fallback');
   for (const flag of analysis?.quality_flags || []) reasons.push(String(flag).replaceAll('_', ' '));
@@ -277,6 +290,12 @@ function intersect(a, b) {
   const right = Math.min(a.x + a.width, b.x + b.width);
   const bottom = Math.min(a.y + a.height, b.y + b.height);
   return { x: left, y: top, width: Math.max(0, right - left), height: Math.max(0, bottom - top) };
+}
+
+function legalPosition(value, viewportSize, drawSize) {
+  return drawSize >= viewportSize
+    ? clamp(value, viewportSize - drawSize, 0)
+    : clamp(value, 0, viewportSize - drawSize);
 }
 
 function centerOf(box) {

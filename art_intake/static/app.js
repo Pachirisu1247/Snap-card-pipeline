@@ -128,11 +128,12 @@ function renderAnalysis() {
   }
   const confidence = Number(current.solution.confidence || 0);
   const band = confidenceBand(confidence);
+  const extended = current.solution.crop?.background_mode === 'extend';
   badge.textContent = `${Math.round(confidence * 100)}% ${band}`;
   badge.className = `confidence ${band}`;
   $('analysisSummary').textContent = current.fallback
-    ? 'A conservative local saliency crop was applied. Advanced detection was unavailable or still needs review.'
-    : `Subject-aware crop applied using ${current.providers.length} analysis provider${current.providers.length === 1 ? '' : 's'}.`;
+    ? `A conservative local saliency crop was applied${extended ? ' with a softened extended backdrop' : ''}. Advanced detection was unavailable or still needs review.`
+    : `Subject-aware ${extended ? 'fit-and-extend composition' : 'cover crop'} applied using ${current.providers.length} analysis provider${current.providers.length === 1 ? '' : 's'}.`;
   $('analysisReasons').replaceChildren(...(current.solution.reasons || []).map(reason => {
     const span = document.createElement('span'); span.className = 'reason'; span.textContent = reason; return span;
   }));
@@ -200,8 +201,16 @@ function syncCropValues() {
 
 function stageManualCrop() {
   const values = syncCropValues();
-  app.stagedCrop[active().id] = { ...values, mode: 'manual', analysis_version: ANALYSIS_VERSION, framing_profile: analysis()?.solution?.framing_profile ?? null, confidence: analysis()?.solution?.confidence ?? null, manual_revision: true };
-  $('previewStatus').textContent = `Manual placement — ${values.scale.toFixed(2)}×, X ${signed(values.pan_x)}, Y ${signed(values.pan_y)}. Updating PSD…`;
+  const previous = crop();
+  const backgroundMode = values.scale < 1 || previous.background_mode === 'extend' ? 'extend' : 'cover';
+  app.stagedCrop[active().id] = {
+    ...values, mode: 'manual', analysis_version: ANALYSIS_VERSION,
+    framing_profile: analysis()?.solution?.framing_profile ?? previous.framing_profile,
+    background_mode: backgroundMode,
+    extension_feather: backgroundMode === 'extend' ? (previous.extension_feather || 0.055) : 0,
+    confidence: analysis()?.solution?.confidence ?? null, manual_revision: true,
+  };
+  $('previewStatus').textContent = `Manual ${backgroundMode === 'extend' ? 'fit-and-extend' : 'cover'} placement — ${values.scale.toFixed(2)}×, X ${signed(values.pan_x)}, Y ${signed(values.pan_y)}. Updating PSD…`;
   queueLivePreview();
 }
 

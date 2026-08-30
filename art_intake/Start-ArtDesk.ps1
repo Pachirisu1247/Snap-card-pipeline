@@ -227,7 +227,7 @@ function Assert-CardId([string]$CardId) {
 }
 
 function New-DefaultCrop([string]$Mode = 'manual') {
-    return [pscustomobject]@{ scale = 1; pan_x = 0; pan_y = 0; mode = $Mode; analysis_version = 3; framing_profile = 'snap-loose-v1' }
+    return [pscustomobject]@{ scale = 1; pan_x = 0; pan_y = 0; mode = $Mode; analysis_version = 4; framing_profile = 'snap-extended-v1'; background_mode = 'cover'; extension_feather = 0 }
 }
 
 function Get-Settings {
@@ -773,7 +773,7 @@ try {
                     duplicate_art = Get-DuplicateArtConflicts $state
                     queue_kind = 'Art Desk 2 - randomized real generated-PSD calibration queue'
                     capabilities = [pscustomobject]@{
-                        analysis_version = 3; framing_profile = 'snap-loose-v1'; advanced_ai = $true; search_configured = $searchConfigured
+                        analysis_version = 4; framing_profile = 'snap-extended-v1'; extended_background = $true; advanced_ai = $true; search_configured = $searchConfigured
                         search_provider = 'brave-images-v1'; https_backend = if ($Script:PythonPath) { 'python-openssl' } else { 'windows-native' }
                     }
                 }); continue

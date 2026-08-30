@@ -1,4 +1,4 @@
-export const ANALYSIS_VERSION = 3;
+export const ANALYSIS_VERSION = 4;
 
 export function defaultCrop(mode = 'manual') {
   return {
@@ -7,6 +7,9 @@ export function defaultCrop(mode = 'manual') {
     pan_y: 0,
     mode,
     analysis_version: mode === 'auto' ? ANALYSIS_VERSION : null,
+    framing_profile: mode === 'auto' ? 'snap-extended-v1' : null,
+    background_mode: 'cover',
+    extension_feather: 0,
     confidence: null,
     manual_revision: mode === 'manual',
   };
@@ -22,6 +25,8 @@ export function normalizeCrop(value) {
     mode,
     analysis_version: numberOrNull(input.analysis_version),
     framing_profile: input.framing_profile ? String(input.framing_profile) : null,
+    background_mode: input.background_mode === 'extend' ? 'extend' : 'cover',
+    extension_feather: finiteRange(input.extension_feather, 0, 0.2, 0),
     confidence: numberOrNull(input.confidence),
     manual_revision: Boolean(input.manual_revision ?? mode === 'manual'),
   };

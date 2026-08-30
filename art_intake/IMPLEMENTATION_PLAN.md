@@ -106,18 +106,20 @@ state, Photopea behavior, or the UI.
 
 ```json
 {
-  "scale": 1.18,
+  "scale": 0.82,
   "pan_x": -4,
   "pan_y": 11,
   "mode": "auto",
-  "analysis_version": 3,
-  "framing_profile": "snap-loose-v1",
+  "analysis_version": 4,
+  "framing_profile": "snap-extended-v1",
+  "background_mode": "extend",
+  "extension_feather": 0.055,
   "confidence": 0.84,
   "manual_revision": false
 }
 ```
 
-Old version-1 records remain readable. Missing fields receive conservative
+Older records remain readable. Missing fields receive conservative
 defaults. A user touching a crop control changes `mode` to `manual` and
 `manual_revision` to `true`; re-running Auto-frame is always explicit after
 that point.
@@ -128,7 +130,7 @@ All coordinates are normalized to `[0, 1]` in the source image.
 
 ```json
 {
-  "version": 3,
+  "version": 4,
   "image": { "width": 1024, "height": 1024 },
   "foreground": {
     "box": { "x": 0.12, "y": 0.04, "width": 0.79, "height": 0.94 },
@@ -137,7 +139,7 @@ All coordinates are normalized to `[0, 1]` in the source image.
     "edge_contact": 0.08
   },
   "critical_regions": [],
-  "crop": { "scale": 1.18, "pan_x": -4, "pan_y": 11 },
+  "crop": { "scale": 0.82, "pan_x": -4, "pan_y": 11, "background_mode": "extend" },
   "confidence": 0.84,
   "quality_flags": [],
   "providers": ["saliency-v1", "Xenova/modnet", "Xenova/yolos-tiny"],

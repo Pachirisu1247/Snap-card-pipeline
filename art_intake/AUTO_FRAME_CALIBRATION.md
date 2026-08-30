@@ -6,7 +6,7 @@ Machine: NVIDIA GeForce RTX 2070 SUPER, 8 GB VRAM
 
 Historical run contract: version 2
 
-Current contract: version 3 (`snap-loose-v1`)
+Current contract: version 4 (`snap-extended-v1`)
 
 ## Result
 
@@ -68,3 +68,23 @@ Browser validation confirmed the duplicate warning, disabled approval and PSD
 preview for Headpool, successful advanced re-analysis for Havok and Galactus,
 and successful authentic-PSD rendering at full output dimensions. Automated
 unit and server tests also cover exact duplicate rejection on upload/import.
+
+## Version-4 fit-and-extend validation
+
+Version 3 could not materially widen either sample because `1.00` represented
+the minimum edge-to-edge cover scale. Version 4 separates the composition into
+a sharp, detected-subject plate and a softened backdrop derived from the same
+source. The backdrop always covers the PSD art box while the sharp plate may
+scale below `1.00` and retain independent pan/zoom controls.
+
+| Artwork | Crop `(scale, x, y)` | Confidence | Extended area | Visible change |
+| --- | ---: | ---: | ---: | --- |
+| Havok | `(0.76, -2, 2)` | 0.89 high | 24.0% | Sharp plate reduced by 24%; subject and focal regions retained. |
+| Galactus: First Steps | `(0.88, 0, 0)` | 0.84 high | 13.3% | Sharp plate reduced by 12%; full scene receives more breathing room. |
+| Headpool | blocked | n/a | n/a | Exact duplicate remains blocked pending genuine art. |
+
+Isolated browser validation covered advanced analysis, initial Photopea layer
+construction, cached sharp-plate resizing, full-quality PNG export, switching
+cards, and the duplicate-art block. The source examples themselves contain
+poster/card lettering, so they remain evidence for rendering mechanics rather
+than evidence of final candidate quality.

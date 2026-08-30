@@ -204,7 +204,7 @@ async function analyzeBitmap(bitmap) {
   const result = analyzeImageData(context.getImageData(0, 0, width, height));
   const faces = await detectFaces(bitmap);
   return {
-    version: 3,
+    version: 4,
     image: { width: bitmap.width, height: bitmap.height },
     ...result,
     critical_regions: faces.length ? faces : result.critical_regions,

@@ -7,6 +7,8 @@ test('manual defaults preserve nullable analysis metadata', () => {
   assert.equal(normalized.mode, 'manual');
   assert.equal(normalized.analysis_version, null);
   assert.equal(normalized.framing_profile, null);
+  assert.equal(normalized.background_mode, 'cover');
+  assert.equal(normalized.extension_feather, 0);
   assert.equal(normalized.confidence, null);
   assert.equal(normalized.manual_revision, true);
 });
@@ -31,6 +33,8 @@ test('crop values are finite and clamped at storage boundaries', () => {
     mode: 'auto',
     analysis_version: null,
     framing_profile: null,
+    background_mode: 'cover',
+    extension_feather: 0,
     confidence: 0.7,
     manual_revision: false,
   });

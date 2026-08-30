@@ -43,8 +43,9 @@ try {
     Assert-Equal @($bootstrap.queue).Count 48 'Bootstrap queue must contain all calibration cards'
     Assert-Equal $bootstrap.calibration.version 1 'Bootstrap must include calibration contract v1'
     Assert-Equal @($bootstrap.candidate_inventory.PSObject.Properties).Count 0 'Fresh runtime candidate inventory must be empty'
-    Assert-Equal $bootstrap.capabilities.analysis_version 3 'Bootstrap must advertise analysis contract v3'
-    Assert-Equal $bootstrap.capabilities.framing_profile 'snap-loose-v1' 'Bootstrap must advertise the framing profile'
+    Assert-Equal $bootstrap.capabilities.analysis_version 4 'Bootstrap must advertise analysis contract v4'
+    Assert-Equal $bootstrap.capabilities.framing_profile 'snap-extended-v1' 'Bootstrap must advertise the framing profile'
+    Assert-Equal $bootstrap.capabilities.extended_background $true 'Bootstrap must advertise extended-background rendering'
     Assert-Equal $bootstrap.capabilities.search_configured $true 'Mock search must count as configured'
     Assert-Equal @($bootstrap.duplicate_art.PSObject.Properties).Count 0 'Fresh runtime duplicate-art map must be empty'
     if ($bootstrap.capabilities.https_backend -notin @('python-openssl', 'windows-native')) { throw 'Bootstrap did not advertise a supported HTTPS backend.' }
@@ -85,8 +86,9 @@ try {
         providers = @('test')
         solution = @{ confidence = 0.7 }
     }
-    $analyzed = Invoke-JsonPost '/api/analysis' @{ card_id = $cardId; crop = @{ scale = 1.1; pan_x = 3; pan_y = -2; mode = 'auto'; analysis_version = 3; framing_profile = 'snap-loose-v1' }; analysis = $analysis }
-    Assert-Equal $analyzed.record.crop.analysis_version 3 'Analysis crop was not persisted'
+    $analyzed = Invoke-JsonPost '/api/analysis' @{ card_id = $cardId; crop = @{ scale = 0.82; pan_x = 3; pan_y = -2; mode = 'auto'; analysis_version = 4; framing_profile = 'snap-extended-v1'; background_mode = 'extend'; extension_feather = 0.055 }; analysis = $analysis }
+    Assert-Equal $analyzed.record.crop.analysis_version 4 'Analysis crop was not persisted'
+    Assert-Equal $analyzed.record.crop.background_mode 'extend' 'Extended background mode was not persisted'
 
     $approved = Invoke-JsonPost '/api/decision' @{ card_id = $cardId; status = 'approved'; source_kind = 'local_file'; source_url = 'https://example.com/source'; note = 'smoke'; crop = $analyzed.record.crop; analysis = $analysis; candidate_id = '' }
     Assert-Equal $approved.record.status 'approved' 'Approval did not persist'
