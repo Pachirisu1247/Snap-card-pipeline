@@ -166,6 +166,60 @@ function Set-CardRecord($State, [string]$CardId, $Record) {
     $State.cards | Add-Member -Force -NotePropertyName $CardId -NotePropertyValue $Record
 }
 
+function Get-BytesSha256([byte[]]$Bytes) {
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { return ([BitConverter]::ToString($sha.ComputeHash($Bytes))).Replace('-', '').ToLowerInvariant() }
+    finally { $sha.Dispose() }
+}
+
+function Get-SavedAssetPath($Record) {
+    if ($null -eq $Record -or [string]::IsNullOrWhiteSpace([string]$Record.image_filename)) { return $null }
+    $path = [IO.Path]::GetFullPath((Join-Path $AssetsDir ([string]$Record.image_filename)))
+    $root = [IO.Path]::GetFullPath($AssetsDir).TrimEnd('\') + '\'
+    if (-not $path.StartsWith($root, [StringComparison]::OrdinalIgnoreCase) -or -not (Test-Path -LiteralPath $path -PathType Leaf)) { return $null }
+    return $path
+}
+
+function Assert-UniqueArtwork($State, [string]$CardId, [byte[]]$Bytes) {
+    $incomingHash = Get-BytesSha256 $Bytes
+    foreach ($property in @($State.cards.PSObject.Properties)) {
+        if ([string]$property.Name -eq $CardId) { continue }
+        $path = Get-SavedAssetPath $property.Value
+        if ($null -eq $path) { continue }
+        $savedHash = [string]$property.Value.image_sha256
+        if ($savedHash -notmatch '^[a-fA-F0-9]{64}$') { $savedHash = Get-BytesSha256 ([IO.File]::ReadAllBytes($path)) }
+        if ($savedHash.ToLowerInvariant() -eq $incomingHash) {
+            throw "That exact image is already assigned to $($property.Name). Choose different artwork for $CardId."
+        }
+    }
+}
+
+function Get-DuplicateArtConflicts($State) {
+    $groups = @{}
+    foreach ($property in @($State.cards.PSObject.Properties)) {
+        $path = Get-SavedAssetPath $property.Value
+        if ($null -eq $path) { continue }
+        $hash = [string]$property.Value.image_sha256
+        if ($hash -notmatch '^[a-fA-F0-9]{64}$') { $hash = Get-BytesSha256 ([IO.File]::ReadAllBytes($path)) }
+        $hash = $hash.ToLowerInvariant()
+        if (-not $groups.ContainsKey($hash)) { $groups[$hash] = [Collections.Generic.List[object]]::new() }
+        $quality = 0
+        if ($null -ne $property.Value.analysis) { $quality += 2 }
+        if (-not [string]::IsNullOrWhiteSpace([string]$property.Value.source_url)) { $quality += 1 }
+        $groups[$hash].Add([pscustomobject]@{ card_id = [string]$property.Name; quality = $quality; updated_at = [string]$property.Value.updated_at })
+    }
+    $conflicts = [pscustomobject]@{}
+    foreach ($hash in @($groups.Keys)) {
+        $members = @($groups[$hash] | Sort-Object -Property @{ Expression = 'quality'; Descending = $true }, @{ Expression = 'updated_at'; Descending = $true })
+        if ($members.Count -lt 2) { continue }
+        $owner = [string]$members[0].card_id
+        foreach ($member in @($members | Select-Object -Skip 1)) {
+            $conflicts | Add-Member -Force NoteProperty ([string]$member.card_id) ([pscustomobject]@{ owner_card_id = $owner; sha256 = $hash })
+        }
+    }
+    return $conflicts
+}
+
 function Assert-CardId([string]$CardId) {
     if ($CardId -notmatch '^[a-z0-9-]+$' -or -not $Script:QueueIds.ContainsKey($CardId)) {
         throw "Unknown or invalid card id: $CardId"
@@ -173,7 +227,7 @@ function Assert-CardId([string]$CardId) {
 }
 
 function New-DefaultCrop([string]$Mode = 'manual') {
-    return [pscustomobject]@{ scale = 1; pan_x = 0; pan_y = 0; mode = $Mode; analysis_version = 2 }
+    return [pscustomobject]@{ scale = 1; pan_x = 0; pan_y = 0; mode = $Mode; analysis_version = 3; framing_profile = 'snap-loose-v1' }
 }
 
 function Get-Settings {
@@ -433,7 +487,10 @@ function Record-CalibrationAnalysis([string]$CardId, $Crop, $Analysis) {
     $now = [DateTime]::UtcNow.ToString('o')
     $confidence = Get-PropertyValue $Analysis @('solution.confidence', 'confidence')
     if ($null -eq $confidence) { $confidence = Get-PropertyValue $Crop @('confidence') }
-    if ($null -eq $card.baseline_crop) {
+    $baselineVersion = Get-PropertyValue $card.baseline_crop @('analysis_version')
+    $newVersion = Get-PropertyValue $Crop @('analysis_version')
+    $replaceUnreviewedBaseline = [string]$card.status -in @('unreviewed', 'selected') -and $null -ne $newVersion -and [string]$baselineVersion -ne [string]$newVersion
+    if ($null -eq $card.baseline_crop -or $replaceUnreviewedBaseline) {
         $card.baseline_crop = $Crop; $card.baseline_confidence = $confidence
         $card.confidence_band = Get-ConfidenceBand $confidence; $card.first_analyzed_at = $now
     }
@@ -713,9 +770,10 @@ try {
                 Write-Json $stream ([pscustomobject]@{
                     queue = $queue; state = $state.cards; template = $template
                     calibration = Get-CalibrationSession; candidate_inventory = Get-CandidateInventory
+                    duplicate_art = Get-DuplicateArtConflicts $state
                     queue_kind = 'Art Desk 2 - randomized real generated-PSD calibration queue'
                     capabilities = [pscustomobject]@{
-                        analysis_version = 2; advanced_ai = $true; search_configured = $searchConfigured
+                        analysis_version = 3; framing_profile = 'snap-loose-v1'; advanced_ai = $true; search_configured = $searchConfigured
                         search_provider = 'brave-images-v1'; https_backend = if ($Script:PythonPath) { 'python-openssl' } else { 'windows-native' }
                     }
                 }); continue
@@ -785,11 +843,12 @@ try {
             if ($request.Method -eq 'POST' -and $path -eq '/api/select-candidate') {
                 $payload = Read-JsonBody $request; $cardId = [string]$payload.card_id; Assert-CardId $cardId
                 $candidate = Get-Candidate $cardId ([string]$payload.candidate_id); $download = Invoke-ImageDownload ([string]$candidate.original_url) 25MB
-                $filename = "$cardId-$($candidate.id)$(Get-ImageExtension $download.mime)"; Save-BytesAtomic (Join-Path $AssetsDir $filename) $download.bytes
                 $state = Get-State; $existing = Get-CardRecord $state $cardId
+                Assert-UniqueArtwork $state $cardId $download.bytes
+                $filename = "$cardId-$($candidate.id)$(Get-ImageExtension $download.mime)"; Save-BytesAtomic (Join-Path $AssetsDir $filename) $download.bytes
                 $record = [pscustomobject]@{
                     status = 'selected'; source_kind = 'art_scout'; source_url = [string]$candidate.source_page_url
-                    image_filename = $filename; candidate_id = [string]$candidate.id; crop = New-DefaultCrop
+                    image_filename = $filename; image_sha256 = Get-BytesSha256 $download.bytes; candidate_id = [string]$candidate.id; crop = New-DefaultCrop
                     analysis = $null; note = if ($existing) { [string]$existing.note } else { '' }; updated_at = [DateTime]::UtcNow.ToString('o')
                 }
                 Set-CardRecord $state $cardId $record; Save-State $state
@@ -801,7 +860,7 @@ try {
                 if ($null -eq $existing -or [string]::IsNullOrWhiteSpace([string]$existing.image_filename)) { throw 'Select artwork before saving its analysis.' }
                 $record = [pscustomobject]@{
                     status = 'selected'; source_kind = [string]$existing.source_kind; source_url = [string]$existing.source_url
-                    image_filename = [string]$existing.image_filename; candidate_id = [string]$existing.candidate_id
+                    image_filename = [string]$existing.image_filename; image_sha256 = [string]$existing.image_sha256; candidate_id = [string]$existing.candidate_id
                     crop = $payload.crop; analysis = $payload.analysis; note = [string]$existing.note; updated_at = [DateTime]::UtcNow.ToString('o')
                 }
                 Set-CardRecord $state $cardId $record; Save-State $state
@@ -817,6 +876,7 @@ try {
                     status = $status; source_kind = if ($isSkip) { '' } else { [string]$payload.source_kind }
                     source_url = if ($isSkip) { '' } else { [string]$payload.source_url }
                     image_filename = if ($isSkip) { '' } elseif ($existing) { [string]$existing.image_filename } else { '' }
+                    image_sha256 = if ($isSkip) { '' } elseif ($existing) { [string]$existing.image_sha256 } else { '' }
                     candidate_id = if ($isSkip) { '' } else { [string]$payload.candidate_id }
                     crop = if ($isSkip) { New-DefaultCrop } else { $payload.crop }; analysis = if ($isSkip) { $null } else { $payload.analysis }
                     note = [string]$payload.note; updated_at = [DateTime]::UtcNow.ToString('o')
@@ -830,11 +890,12 @@ try {
                 $match = [regex]::Match([string]$payload.image_data_url, '^data:(image/(?:jpeg|png|webp|gif|avif));base64,([A-Za-z0-9+/=\r\n]+)$')
                 if (-not $match.Success) { throw 'Upload must be a PNG, JPEG, WebP, GIF, or AVIF data URL.' }
                 $bytes = [Convert]::FromBase64String($match.Groups[2].Value); if ($bytes.Length -gt 25MB) { throw 'Images must be 25 MB or smaller.' }
-                $detected = Get-ImageMime $bytes; $filename = "$cardId$(Get-ImageExtension $detected)"; Save-BytesAtomic (Join-Path $AssetsDir $filename) $bytes
                 $state = Get-State; $existing = Get-CardRecord $state $cardId
+                Assert-UniqueArtwork $state $cardId $bytes
+                $detected = Get-ImageMime $bytes; $filename = "$cardId$(Get-ImageExtension $detected)"; Save-BytesAtomic (Join-Path $AssetsDir $filename) $bytes
                 $record = [pscustomobject]@{
                     status = 'selected'; source_kind = [string]$payload.source_kind; source_url = [string]$payload.source_url
-                    image_filename = $filename; candidate_id = ''; crop = New-DefaultCrop; analysis = $null
+                    image_filename = $filename; image_sha256 = Get-BytesSha256 $bytes; candidate_id = ''; crop = New-DefaultCrop; analysis = $null
                     note = if ($existing) { [string]$existing.note } else { '' }; updated_at = [DateTime]::UtcNow.ToString('o')
                 }
                 Set-CardRecord $state $cardId $record; Save-State $state
@@ -843,11 +904,12 @@ try {
             if ($request.Method -eq 'POST' -and $path -eq '/api/import-url') {
                 $payload = Read-JsonBody $request; $cardId = [string]$payload.card_id; Assert-CardId $cardId
                 $download = Invoke-ImageDownload ([string]$payload.image_url) 25MB
-                $filename = "$cardId$(Get-ImageExtension $download.mime)"; Save-BytesAtomic (Join-Path $AssetsDir $filename) $download.bytes
                 $state = Get-State; $existing = Get-CardRecord $state $cardId
+                Assert-UniqueArtwork $state $cardId $download.bytes
+                $filename = "$cardId$(Get-ImageExtension $download.mime)"; Save-BytesAtomic (Join-Path $AssetsDir $filename) $download.bytes
                 $record = [pscustomobject]@{
                     status = 'selected'; source_kind = 'direct_url'; source_url = [string]$payload.source_url
-                    image_filename = $filename; candidate_id = ''; crop = New-DefaultCrop; analysis = $null
+                    image_filename = $filename; image_sha256 = Get-BytesSha256 $download.bytes; candidate_id = ''; crop = New-DefaultCrop; analysis = $null
                     note = if ($existing) { [string]$existing.note } else { '' }; updated_at = [DateTime]::UtcNow.ToString('o')
                 }
                 Set-CardRecord $state $cardId $record; Save-State $state

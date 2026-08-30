@@ -110,7 +110,8 @@ state, Photopea behavior, or the UI.
   "pan_x": -4,
   "pan_y": 11,
   "mode": "auto",
-  "analysis_version": 2,
+  "analysis_version": 3,
+  "framing_profile": "snap-loose-v1",
   "confidence": 0.84,
   "manual_revision": false
 }
@@ -127,7 +128,7 @@ All coordinates are normalized to `[0, 1]` in the source image.
 
 ```json
 {
-  "version": 2,
+  "version": 3,
   "image": { "width": 1024, "height": 1024 },
   "foreground": {
     "box": { "x": 0.12, "y": 0.04, "width": 0.79, "height": 0.94 },

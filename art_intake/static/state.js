@@ -1,4 +1,4 @@
-export const ANALYSIS_VERSION = 2;
+export const ANALYSIS_VERSION = 3;
 
 export function defaultCrop(mode = 'manual') {
   return {
@@ -21,6 +21,7 @@ export function normalizeCrop(value) {
     pan_y: finiteRange(input.pan_y, -100, 100, 0),
     mode,
     analysis_version: numberOrNull(input.analysis_version),
+    framing_profile: input.framing_profile ? String(input.framing_profile) : null,
     confidence: numberOrNull(input.confidence),
     manual_revision: Boolean(input.manual_revision ?? mode === 'manual'),
   };

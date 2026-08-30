@@ -1,5 +1,5 @@
 import { getJson, postJson } from './api.js';
-import { migrateState, normalizeCrop, defaultCrop } from './state.js';
+import { ANALYSIS_VERSION, migrateState, normalizeCrop, defaultCrop } from './state.js';
 import { solveCrop, confidenceBand } from './crop-solver.js';
 import { ImageAnalyzer, analyzeSourceFallback, perceptualHash } from './image-analysis.js';
 import { deterministicFilter, deduplicateCandidates, rankCandidates } from './candidate-ranker.js';
@@ -14,6 +14,7 @@ const app = {
   analysis: {}, stagedCrop: {}, liveTimer: null, liveQueued: false,
   candidates: [], showAllCandidates: false, candidateRun: 0,
   calibration: { version: 1, cards: {} }, candidateInventory: {}, batchState: { status: 'idle' }, lastSavedAt: null,
+  duplicateArt: {},
 };
 const batch = new BatchController({
   runTask: async card => {
@@ -39,7 +40,8 @@ function active() { return app.queue[app.index]; }
 function record(card = active()) { return card ? app.state[card.id] || null : null; }
 function crop(card = active()) { return normalizeCrop(app.stagedCrop[card?.id] || record(card)?.crop || defaultCrop()); }
 function analysis(card = active()) { return card ? app.analysis[card.id] || record(card)?.analysis || null : null; }
-function hasArt() { return Boolean(app.localDataUrl || record()?.image_filename); }
+function duplicateConflict(card = active()) { return card ? app.duplicateArt[card.id] || null : null; }
+function hasArt() { return Boolean((app.localDataUrl || record()?.image_filename) && !duplicateConflict()); }
 function artSource() { const card = active(), saved = record(); return app.localDataUrl || (saved?.image_filename ? `/art/${encodeURIComponent(card.id)}?v=${encodeURIComponent(saved.updated_at)}` : ''); }
 function artKey() { const saved = record(); return app.localDataUrl ? `local-${app.localToken}` : `${saved?.image_filename || 'none'}-${saved?.updated_at || 0}`; }
 
@@ -83,7 +85,7 @@ function renderQueue() {
     const button = document.createElement('button');
     button.type = 'button'; button.className = `queue-item${index === app.index ? ' active' : ''}`;
     const label = document.createElement('span'); label.textContent = displayName(card.id);
-    const dot = document.createElement('i'); dot.className = `dot ${app.state[card.id]?.status || ''}`;
+    const dot = document.createElement('i'); dot.className = `dot ${app.duplicateArt[card.id] ? 'duplicate' : app.state[card.id]?.status || ''}`;
     button.append(label, dot);
     button.addEventListener('click', () => navigate(index));
     return button;
@@ -139,11 +141,13 @@ function renderAnalysis() {
 function render() {
   cancelLivePreview();
   const card = active(), saved = record(), currentCrop = crop();
+  const duplicate = duplicateConflict(card);
   setPreview('');
   $('cardName').textContent = displayName(card.id);
   $('cardRules').textContent = card.rules || 'No rules text in the current database.';
-  setChip($('cardStatus'), saved?.status || 'unstarted', saved?.status === 'approved' ? 'good' : saved?.status === 'skipped' ? 'bad' : saved?.status ? 'warn' : 'neutral');
-  $('previewStatus').textContent = app.importing ? 'Importing artwork…' : hasArt() ? `Artwork selected: ${saved?.image_filename || 'local image'}.` : 'No artwork selected.';
+  setChip($('cardStatus'), duplicate ? 'duplicate art' : saved?.status || 'unstarted', duplicate ? 'bad' : saved?.status === 'approved' ? 'good' : saved?.status === 'skipped' ? 'bad' : saved?.status ? 'warn' : 'neutral');
+  $('artEmpty').textContent = duplicate ? `Blocked: this saved file is identical to ${displayName(duplicate.owner_card_id)} art. Choose the correct image.` : 'Choose artwork or run Art Scout.';
+  $('previewStatus').textContent = app.importing ? 'Importing artwork…' : duplicate ? `Duplicate-art safety block: ${saved?.image_filename} is identical to ${displayName(duplicate.owner_card_id)}.` : hasArt() ? `Artwork selected: ${saved?.image_filename || 'local image'}.` : 'No artwork selected.';
   setCropControls(currentCrop);
   $('urlInput').value = '';
   $('sourceInput').value = saved?.source_url || '';
@@ -196,7 +200,7 @@ function syncCropValues() {
 
 function stageManualCrop() {
   const values = syncCropValues();
-  app.stagedCrop[active().id] = { ...values, mode: 'manual', analysis_version: 2, confidence: analysis()?.solution?.confidence ?? null, manual_revision: true };
+  app.stagedCrop[active().id] = { ...values, mode: 'manual', analysis_version: ANALYSIS_VERSION, framing_profile: analysis()?.solution?.framing_profile ?? null, confidence: analysis()?.solution?.confidence ?? null, manual_revision: true };
   $('previewStatus').textContent = `Manual placement — ${values.scale.toFixed(2)}×, X ${signed(values.pan_x)}, Y ${signed(values.pan_y)}. Updating PSD…`;
   queueLivePreview();
 }
@@ -276,6 +280,7 @@ async function uploadFile(file) {
     const dataUrl = await fileToDataUrl(file);
     const uploaded = await postJson('/api/upload-image', { card_id: active().id, image_data_url: dataUrl, source_kind: 'local_file', source_url: $('sourceInput').value.trim() });
     app.state[active().id] = uploaded.record; app.localDataUrl = null; app.localToken += 1;
+    delete app.duplicateArt[active().id];
     clearCardDerivedState(); render();
     await autoFrame({ advanced: true, quiet: true });
   } catch (error) { toast(`Could not import that file: ${error.message}`, true); }
@@ -289,6 +294,7 @@ async function importUrl() {
   try {
     const imported = await postJson('/api/import-url', { card_id: active().id, image_url: imageUrl, source_url: $('sourceInput').value.trim() });
     app.state[active().id] = imported.record; app.localDataUrl = null; app.localToken += 1;
+    delete app.duplicateArt[active().id];
     clearCardDerivedState(); render();
     await autoFrame({ advanced: true, quiet: true });
   } catch (error) { toast(`Could not import that image: ${error.message}`, true); }
@@ -443,7 +449,7 @@ async function selectCandidate(candidate) {
   app.importing = true; syncControls(); $('previewStatus').textContent = 'Downloading selected full-resolution artwork…';
   try {
     const data = await postJson('/api/select-candidate', { card_id: active().id, candidate_id: candidate.id });
-    app.state[active().id] = data.record; clearCardDerivedState(); render();
+    app.state[active().id] = data.record; delete app.duplicateArt[active().id]; clearCardDerivedState(); render();
     if (candidate.analysis && candidate.suggested_crop) {
       const solution = solveCrop(candidate.analysis);
       app.analysis[active().id] = { ...candidate.analysis, solution, provisional: true };
@@ -502,7 +508,7 @@ async function bootstrap() {
     const data = await getJson('/api/bootstrap');
     app.queue = (Array.isArray(data.queue) ? data.queue : data.queue?.value || []).slice().sort((a, b) => String(a.id).localeCompare(String(b.id), undefined, { sensitivity: 'base' }));
     app.state = migrateState(data.state || {}); app.template = data.template; app.capabilities = data.capabilities || {};
-    app.calibration = data.calibration || { version: 1, cards: {} }; app.candidateInventory = data.candidate_inventory || {};
+    app.calibration = data.calibration || { version: 1, cards: {} }; app.candidateInventory = data.candidate_inventory || {}; app.duplicateArt = data.duplicate_art || {};
     const unfinished = app.queue.findIndex(card => !app.state[card.id]?.status || ['selected', 'needs_review'].includes(app.state[card.id]?.status));
     app.index = unfinished >= 0 ? unfinished : 0;
     $('queueKind').textContent = data.queue_kind || 'Real-PSD calibration queue';

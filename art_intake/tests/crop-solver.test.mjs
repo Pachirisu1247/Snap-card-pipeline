@@ -31,7 +31,8 @@ test('solver is deterministic and returns a legal cover crop', () => {
   const second = solveCrop(structuredClone(input));
   assert.deepEqual(first, second);
   assert.equal(first.crop.mode, 'auto');
-  assert.equal(first.crop.analysis_version, 2);
+  assert.equal(first.crop.analysis_version, 3);
+  assert.equal(first.crop.framing_profile, 'snap-loose-v1');
   assert.ok(first.proposal_count >= 27);
 
   const placement = placementForCrop(first.crop, input.image);
@@ -65,6 +66,23 @@ test('a heavily clipped foreground can never be high confidence', () => {
   assert.ok(result.evaluation.foreground_retained < 0.92);
   assert.ok(result.confidence <= 0.77);
   assert.notEqual(confidenceBand(result.confidence), 'high');
+});
+
+test('a narrow portrait that forces a tight crop is downgraded and explained', () => {
+  const result = solveCrop(analysis({
+    image: { width: 825, height: 1275 },
+    foreground: {
+      box: { x: 0.018, y: 0, width: 0.982, height: 0.964 },
+      centroid: { x: 0.508, y: 0.586 },
+      confidence: 0.88,
+    },
+    critical_regions: [{ box: { x: 0.343, y: 0.128, width: 0.37, height: 0.254 }, weight: 1.35 }],
+  }));
+  assert.equal(result.crop.scale, 1);
+  assert.equal(result.band, 'low');
+  assert.ok(result.evaluation.foreground_retained < 0.86);
+  assert.ok(result.reasons.includes('source forces a tight crop—prefer wider dynamic art'));
+  assert.ok(Math.abs(result.crop.pan_y) <= 15);
 });
 
 test('critical region remains visible in the selected crop', () => {

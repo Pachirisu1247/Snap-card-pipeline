@@ -6,6 +6,7 @@ test('manual defaults preserve nullable analysis metadata', () => {
   const normalized = normalizeCrop(defaultCrop());
   assert.equal(normalized.mode, 'manual');
   assert.equal(normalized.analysis_version, null);
+  assert.equal(normalized.framing_profile, null);
   assert.equal(normalized.confidence, null);
   assert.equal(normalized.manual_revision, true);
 });
@@ -29,6 +30,7 @@ test('crop values are finite and clamped at storage boundaries', () => {
     pan_y: 0,
     mode: 'auto',
     analysis_version: null,
+    framing_profile: null,
     confidence: 0.7,
     manual_revision: false,
   });

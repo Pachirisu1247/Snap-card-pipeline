@@ -60,6 +60,13 @@ are capped at the best 24 metadata candidates for the active card.
 - crop scoring protects Cost, Power, logo, and Rules occlusion regions;
 - perceptual hashes remove near-duplicate search results.
 
+Auto-frame contract version 3 uses the `snap-loose-v1` profile. It favors
+breathing room and environment over aggressive subject enlargement, penalizes
+foreground clipping and excessive pan, and explicitly marks source art that
+forces a tight crop as low confidence. Exact SHA-256 matches across cards are
+blocked before selection; legacy duplicate files remain visible as a repair
+warning and cannot be approved.
+
 Models run in a worker and are cached by the browser after first use. The first
 analysis/search-ranking run therefore takes longer than later runs.
 
@@ -89,3 +96,5 @@ pnpm run test:server
 See `CALIBRATION_RUNBOOK.md` for checkpoints and live-run gates,
 `AUTO_FRAME_CALIBRATION.md` for measured smoke results, and
 `IMPLEMENTATION_PLAN.md` for the full acceptance contract and deferred scope.
+`VARIANT_CANDIDATE_PIPELINE_PLAN.md` specifies the gated, manual-first variant
+and dynamic-art library planned for the next implementation run.

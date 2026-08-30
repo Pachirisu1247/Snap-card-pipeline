@@ -1,7 +1,8 @@
 export const ART_VIEWPORT = Object.freeze({ width: 1792, height: 2006 });
 export const CONFIDENCE_THRESHOLDS = Object.freeze({ high: 0.78, medium: 0.55 });
+export const FRAMING_PROFILE = 'snap-loose-v1';
 
-const SCALE_STEPS = Object.freeze([1, 1.08, 1.16, 1.28, 1.42, 1.6, 1.85, 2.15, 2.4]);
+const SCALE_STEPS = Object.freeze([1, 1.06, 1.12, 1.22, 1.34, 1.5, 1.72, 2]);
 const OCCLUSIONS = Object.freeze([
   { id: 'cost', x: 0, y: 0, width: 0.24, height: 0.19, weight: 1.55 },
   { id: 'power', x: 0.76, y: 0, width: 0.24, height: 0.19, weight: 1.55 },
@@ -43,7 +44,8 @@ export function solveCrop(analysis, options = {}) {
       pan_x: round(best.crop.pan_x, 0),
       pan_y: round(best.crop.pan_y, 0),
       mode: 'auto',
-      analysis_version: 2,
+      analysis_version: 3,
+      framing_profile: FRAMING_PROFILE,
       confidence: round(confidence, 3),
       manual_revision: false,
     },
@@ -53,6 +55,7 @@ export function solveCrop(analysis, options = {}) {
     evaluation: best.evaluation,
     proposal_count: proposals.length,
     winning_anchor: best.anchor,
+    framing_profile: FRAMING_PROFILE,
   };
 }
 
@@ -120,7 +123,7 @@ function scoreCrop(crop, image, foreground, critical, viewport) {
   const projectedForeground = projectBox(foreground.box, crop, image, viewport);
   const foregroundRetained = visibleFraction(projectedForeground, viewport);
   const normalizedForegroundHeight = projectedForeground.height / viewport.height;
-  let penalty = (1 - foregroundRetained) * 900;
+  let penalty = (1 - foregroundRetained) * 1300;
   let criticalRetained = 1;
   let criticalOcclusion = 0;
 
@@ -136,12 +139,12 @@ function scoreCrop(crop, image, foreground, critical, viewport) {
       penalty += overlap * 1850 * danger.weight * region.weight;
     }
     const center = centerOf(projected);
-    const targetDistance = Math.hypot(center.x / viewport.width - 0.5, center.y / viewport.height - 0.35);
-    penalty += targetDistance * 95 / Math.max(0.35, region.weight);
+    const targetDistance = Math.hypot(center.x / viewport.width - 0.5, center.y / viewport.height - 0.31);
+    penalty += targetDistance * 115 / Math.max(0.35, region.weight);
   }
 
-  if (normalizedForegroundHeight < 0.46) penalty += (0.46 - normalizedForegroundHeight) * 440;
-  if (normalizedForegroundHeight > 1.48) penalty += (normalizedForegroundHeight - 1.48) * 180;
+  if (normalizedForegroundHeight < 0.5) penalty += (0.5 - normalizedForegroundHeight) * 480;
+  if (normalizedForegroundHeight > 1.14) penalty += (normalizedForegroundHeight - 1.14) * 520;
 
   const projectedCentroid = {
     x: placementForCrop(crop, image, viewport).x + foreground.centroid.x * placementForCrop(crop, image, viewport).width,
@@ -149,7 +152,11 @@ function scoreCrop(crop, image, foreground, critical, viewport) {
   };
   const centroidDistance = Math.hypot(projectedCentroid.x / viewport.width - 0.5, projectedCentroid.y / viewport.height - 0.43);
   penalty += centroidDistance * 90;
-  penalty += Math.max(0, crop.scale - 1) * 18;
+  const placement = placementForCrop(crop, image, viewport);
+  const sourceRetained = clamp(viewport.width * viewport.height / Math.max(1, placement.width * placement.height), 0, 1);
+  penalty += (1 - sourceRetained) * 120;
+  penalty += Math.max(0, crop.scale - 1) * 150;
+  penalty += Math.hypot(crop.pan_x, crop.pan_y) * 1.6;
 
   return {
     penalty: round(penalty, 3),
@@ -157,22 +164,23 @@ function scoreCrop(crop, image, foreground, critical, viewport) {
     critical_retained: round(criticalRetained, 4),
     critical_occlusion: round(criticalOcclusion, 4),
     subject_height: round(normalizedForegroundHeight, 4),
+    source_retained: round(sourceRetained, 4),
   };
 }
 
 function buildAnchors(foreground, critical) {
   const anchors = [
-    { id: 'foreground-centroid', source: foreground.centroid, target: { x: 0.5, y: 0.43 } },
-    { id: 'foreground-center', source: centerOf(foreground.box), target: { x: 0.5, y: 0.45 } },
+    { id: 'foreground-centroid', source: foreground.centroid, target: { x: 0.5, y: 0.42 } },
+    { id: 'foreground-center', source: centerOf(foreground.box), target: { x: 0.5, y: 0.43 } },
     { id: 'center-cover', source: { x: 0.5, y: 0.5 }, target: { x: 0.5, y: 0.5 } },
   ];
   for (const [index, region] of critical.entries()) {
     const source = centerOf(region.box);
-    anchors.push({ id: `critical-${index}-center`, source, target: { x: 0.5, y: 0.34 } });
-    anchors.push({ id: `critical-${index}-third`, source, target: { x: source.x < 0.5 ? 0.39 : 0.61, y: 0.34 } });
+    anchors.push({ id: `critical-${index}-center`, source, target: { x: 0.5, y: 0.3 } });
+    anchors.push({ id: `critical-${index}-third`, source, target: { x: source.x < 0.5 ? 0.39 : 0.61, y: 0.3 } });
   }
   const union = unionBoxes(critical.map(region => region.box));
-  if (union) anchors.push({ id: 'critical-union', source: centerOf(union), target: { x: 0.5, y: 0.37 } });
+  if (union) anchors.push({ id: 'critical-union', source: centerOf(union), target: { x: 0.5, y: 0.32 } });
   return uniqueAnchors(anchors);
 }
 
@@ -182,10 +190,11 @@ function calculateConfidence(analysis, best, second) {
   const agreementBonus = Math.min(0.12, Math.max(0, providerCount - 1) * 0.06);
   const retention = 0.54 * best.foreground_retained + 0.46 * best.critical_retained;
   const occlusionQuality = clamp(1 - best.critical_occlusion, 0, 1);
+  const contextQuality = clamp(best.source_retained, 0, 1);
   const margin = clamp((second.penalty - best.penalty) / Math.max(30, second.penalty), 0, 1);
   const fallbackPenalty = analysis?.fallback ? 0.1 : 0;
   const flagPenalty = Math.min(0.18, (analysis?.quality_flags || []).length * 0.035);
-  let confidence = clamp(0.23 * providerConfidence + 0.42 * retention + 0.17 * occlusionQuality + 0.08 * margin + agreementBonus - fallbackPenalty - flagPenalty, 0.05, 0.98);
+  let confidence = clamp(0.21 * providerConfidence + 0.36 * retention + 0.16 * occlusionQuality + 0.08 * margin + 0.1 * contextQuality + agreementBonus - fallbackPenalty - flagPenalty, 0.05, 0.98);
 
   // A numerical provider score cannot overrule an unsafe crop. High confidence
   // is reserved for crops that actually retain the detected subject and keep
@@ -193,7 +202,7 @@ function calculateConfidence(analysis, best, second) {
   // face/head region similarly requires human review.
   if (!(analysis?.critical_regions || []).length) confidence = Math.min(confidence, 0.68);
   if (best.foreground_retained < 0.92 || best.critical_retained < 0.98 || best.critical_occlusion > 0.05) confidence = Math.min(confidence, 0.77);
-  if (best.foreground_retained < 0.72 || best.critical_retained < 0.9 || best.critical_occlusion > 0.14) confidence = Math.min(confidence, 0.54);
+  if (best.foreground_retained < 0.86 || best.subject_height > 1.2 || best.critical_retained < 0.9 || best.critical_occlusion > 0.14) confidence = Math.min(confidence, 0.54);
   return confidence;
 }
 
@@ -203,6 +212,8 @@ function buildReasons(analysis, best, confidence) {
   if (evaluation.critical_retained >= 0.98) reasons.push('critical subject retained');
   if (evaluation.critical_occlusion <= 0.03) reasons.push('clear of card overlays');
   if (evaluation.foreground_retained >= 0.96) reasons.push('foreground retained');
+  if (evaluation.source_retained >= 0.82) reasons.push('scene context retained');
+  if (evaluation.foreground_retained < 0.86 || evaluation.subject_height > 1.2) reasons.push('source forces a tight crop—prefer wider dynamic art');
   if (best.crop.scale <= 1.16) reasons.push('minimal extra zoom');
   if ((analysis?.critical_regions || []).length === 0) reasons.push('no reliable face/head box');
   if (analysis?.fallback) reasons.push('local saliency fallback');
