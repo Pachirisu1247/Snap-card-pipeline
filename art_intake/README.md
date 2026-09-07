@@ -27,9 +27,12 @@ Then open <http://127.0.0.1:5010>.
    any earlier approval.
 
 Art Scout uses the documented Brave Image Search API. Every manual and batch
-query is automatically expanded into an art-only search profile, and obvious
-toy/statue/product, storefront, cosplay-photo, and drawing-tutorial results are
-hard-rejected before thumbnail analysis or AI ranking. Enter the key once in the
+query is automatically expanded into a character-art search profile. A candidate
+must name the requested character in its own image title or filename; a matching
+results-page URL is not enough. Known rendered-card assets plus obvious toy,
+storefront, cosplay-photo, and tutorial results are hard-rejected before visual
+verification. The visual verifier can additionally reject confident wrong-character
+and card-frame matches. Enter the key once in the
 setup panel or set `ART_DESK_BRAVE_API_KEY`. The key is saved only in ignored
 `data/settings.local.json`, is never returned by the API, and is never committed.
 

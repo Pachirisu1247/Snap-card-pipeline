@@ -92,16 +92,17 @@ async function runRanking(message) {
   cancelledJob = null;
   const cleanName = String(characterName || '').replaceAll('-', ' ').trim();
   const labels = [
-    `${cleanName} Marvel character`,
-    `high quality comic book illustration of ${cleanName}`,
-    'professional full character artwork',
-    'unrelated character or random image',
+    `${cleanName} as the main and clearly visible character`,
+    `comic illustration centered on ${cleanName}`,
+    'finished comic book artwork without a card frame, stats, title, or interface',
+    `a different Marvel character with ${cleanName} absent`,
+    'a completed Marvel Snap card showing cost, power, frame, or character name',
+    `${cleanName} hidden in a group where another character is the main subject`,
     'toy, statue, action figure, collectible, or merchandise product photo',
     'cosplay, actor, live action movie still, or ordinary photograph',
-    'drawing tutorial, coloring page, logo, screenshot, trading card, collage, or text poster',
+    'drawing tutorial, coloring page, logo, screenshot, collage, or text poster',
     'low quality or blurry image',
   ];
-  const positive = new Set(labels.slice(0, 3));
   const results = [];
 
   progress(jobId, 'ranking-model', 0, 'Loading character relevance model');
@@ -115,8 +116,19 @@ async function runRanking(message) {
         try {
           const output = await classifier(candidate.source, labels);
           const scores = Object.fromEntries(output.map(item => [item.label, Number(item.score)]));
-          const relevance = [...positive].reduce((sum, label) => sum + (scores[label] || 0), 0);
-          attemptResults.push({ id: candidate.id, relevance, scores });
+          const identityScore = (scores[labels[0]] || 0) + (scores[labels[1]] || 0);
+          const artworkScore = scores[labels[2]] || 0;
+          const wrongCharacterScore = (scores[labels[3]] || 0) + (scores[labels[5]] || 0);
+          const renderedCardScore = scores[labels[4]] || 0;
+          const merchandiseScore = scores[labels[6]] || 0;
+          const photoScore = scores[labels[7]] || 0;
+          const tutorialScore = scores[labels[8]] || 0;
+          const relevance = identityScore + artworkScore;
+          attemptResults.push({
+            id: candidate.id, relevance, identity_score: identityScore, artwork_score: artworkScore,
+            wrong_character_score: wrongCharacterScore, rendered_card_score: renderedCardScore,
+            merchandise_score: merchandiseScore, photo_score: photoScore, tutorial_score: tutorialScore, scores,
+          });
         } catch (error) {
           if (isRuntimeFailure(error)) throw error;
           attemptResults.push({ id: candidate.id, relevance: 0, scores: {}, error: error.message || String(error) });

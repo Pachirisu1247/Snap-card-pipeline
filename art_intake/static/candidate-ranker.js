@@ -1,12 +1,14 @@
 import { hashDistance } from './image-analysis.js';
 
-export const RANKING_VERSION = 2;
+export const RANKING_VERSION = 3;
 export const RANKING_WEIGHTS = Object.freeze({ relevance: 0.35, composition: 0.25, resolution: 0.15, diversity: 0.1, cleanliness: 0.1, provider: 0.05 });
 
-// Brave Images currently returns *more* merchandise when negative product
-// tokens are supplied. Anchoring searches to Marvel Snap variants yields a
-// much cleaner visual pool; deterministic content gates below do the excluding.
-const ART_QUERY_POSITIVES = Object.freeze(['Marvel Snap', 'variants', 'artwork', 'comic illustration']);
+const ART_QUERY_POSITIVES = Object.freeze(['Marvel', 'character', 'comic artwork', 'illustration']);
+const CHARACTER_QUERY_HINTS = Object.freeze({
+  havok: 'Alex Summers X-Men',
+  headpool: 'Marvel Snap Deadpool',
+  'galactus first steps': 'Fantastic Four Galactus',
+});
 
 const CONTENT_PATTERNS = Object.freeze({
   merchandise: [
@@ -33,12 +35,27 @@ const STOREFRONT_HOSTS = Object.freeze([
   'bigbadtoystore.', 'sideshow.', 'ironstudios.', 'entertainmentearth.', 'gamestop.', 'shopdisney.',
 ]);
 
+const RENDERED_CARD_PATTERNS = Object.freeze([
+  /snapcomplete-cdn\.pages\.dev\/(?:cards|variants)\//i,
+  /static\.marvelsnap\.pro\/cards\//i,
+  /snapjson\.untapped\.gg\/art\/render\//i,
+  /game-assets\.snap\.fan\/card_variant_images\//i,
+  /marvelsnapzone\.com\/(?:[^\s]*\/)?assets\/media\/cards\//i,
+  /reddit\.com\/r\/custommarvelsnap\//i,
+  /\bmarvel snap card(?: art| image| render)?\b/i,
+]);
+
+const IDENTITY_NOISE = new Set(['the', 'marvel', 'snap', 'card', 'variant', 'first', 'steps']);
+
 export function buildArtSearchQuery(characterName, input = '') {
   const cleanName = String(characterName || '').replaceAll('-', ' ').replace(/\s+/g, ' ').trim();
   const raw = String(input || '').replace(/\s+/g, ' ').trim();
   const base = boundQueryPart(raw || (cleanName ? `"${cleanName.replaceAll('"', '')}"` : ''), 32, 240);
   const parts = [base].filter(Boolean);
   const current = () => parts.join(' ');
+
+  const hint = CHARACTER_QUERY_HINTS[normalizeIdentityText(cleanName)];
+  if (hint && !containsWords(current(), hint)) parts.push(hint);
 
   for (const term of ART_QUERY_POSITIVES) {
     if (!new RegExp(`\\b${escapeRegExp(term).replaceAll('\\ ', '\\s+')}\\b`, 'i').test(current())) parts.push(term);
@@ -67,7 +84,7 @@ export function normalizeCandidateUrl(value) {
   } catch { return ''; }
 }
 
-export function deterministicFilter(candidates, { minWidth = 600, minHeight = 600 } = {}) {
+export function deterministicFilter(candidates, { minWidth = 450, minHeight = 450, characterName = '' } = {}) {
   const seenUrls = new Set();
   return (candidates || []).map(candidate => {
     const original = normalizeCandidateUrl(candidate.original_url);
@@ -82,12 +99,18 @@ export function deterministicFilter(candidates, { minWidth = 600, minHeight = 60
     const aspect = width > 0 && height > 0 ? width / height : null;
     if (aspect && (aspect < 0.32 || aspect > 2.25)) flags.push('extreme_aspect');
     flags.push(...candidateContentFlags({ ...candidate, original_url: original }));
+    const identity = assessCandidateIdentity({ ...candidate, original_url: original }, characterName);
+    if (characterName && !identity.verified) flags.push('identity_unverified');
     if (metadataTextRisk(candidate) > 0.75) flags.push('metadata_text_risk');
     const hardFailures = new Set([
       'invalid_url', 'duplicate_url', 'low_width', 'low_height', 'extreme_aspect', 'metadata_text_risk',
-      'merchandise', 'storefront', 'cosplay_photo', 'tutorial',
+      'merchandise', 'storefront', 'cosplay_photo', 'tutorial', 'rendered_card', 'identity_unverified',
     ]);
-    return { ...candidate, original_url: original, thumbnail_url: thumbnail, filter_flags: flags, rejected: flags.some(flag => hardFailures.has(flag)) };
+    return {
+      ...candidate, original_url: original, thumbnail_url: thumbnail,
+      identity_verified: identity.verified, identity_evidence: identity.evidence,
+      filter_flags: [...new Set(flags)], rejected: flags.some(flag => hardFailures.has(flag)),
+    };
   });
 }
 
@@ -99,7 +122,39 @@ export function candidateContentFlags(candidate) {
   }
   const hosts = [candidate.source_page_url, candidate.original_url].map(hostname).filter(Boolean);
   if (hosts.some(host => STOREFRONT_HOSTS.some(store => host === store.slice(0, -1) || host.includes(`.${store}`) || host.startsWith(store)))) flags.push('storefront');
+  if (RENDERED_CARD_PATTERNS.some(pattern => pattern.test(value))) flags.push('rendered_card');
   return [...new Set(flags)];
+}
+
+export function assessCandidateIdentity(candidate, characterName) {
+  const target = identityTerms(characterName);
+  if (!target.length) return { verified: false, evidence: [] };
+  const title = normalizeIdentityText(candidate.title);
+  const originalFile = normalizeIdentityText(urlFilename(candidate.original_url));
+  const evidence = [];
+  if (matchesIdentity(title, target)) evidence.push('title');
+  if (matchesIdentity(originalFile, target)) evidence.push('image_filename');
+  return { verified: evidence.length > 0, evidence };
+}
+
+export function semanticVerificationFlags(candidate) {
+  const identity = Number(candidate.semantic_identity || 0);
+  const artwork = Number(candidate.semantic_artwork || 0);
+  const wrong = Number(candidate.semantic_wrong_character || 0);
+  const card = Number(candidate.semantic_rendered_card || 0);
+  const merchandise = Number(candidate.semantic_merchandise || 0);
+  const photo = Number(candidate.semantic_photo || 0);
+  const tutorial = Number(candidate.semantic_tutorial || 0);
+  const imageNamesTarget = (candidate.identity_evidence || []).includes('image_filename');
+  const flags = [];
+  // CLIP is supporting evidence, not stronger than an exact title/filename
+  // match. Only veto when a negative class wins by a wide, confident margin.
+  if (!imageNamesTarget && wrong >= 0.32 && wrong > identity * 2.2) flags.push('wrong_character_visual');
+  if (card >= 0.28 && card > artwork * 1.8) flags.push('rendered_card_visual');
+  if (merchandise >= 0.3 && merchandise > artwork * 1.9) flags.push('merchandise_visual');
+  if (photo >= 0.3 && photo > artwork * 1.9) flags.push('photo_visual');
+  if (tutorial >= 0.3 && tutorial > artwork * 1.9) flags.push('tutorial_visual');
+  return flags;
 }
 
 export function deduplicateCandidates(candidates, maximumDistance = 5) {
@@ -159,6 +214,33 @@ export function metadataTextRisk(candidate) {
 function hostname(value) {
   try { return new URL(String(value || '')).hostname.toLowerCase().replace(/^www\./, ''); }
   catch { return ''; }
+}
+
+function urlFilename(value) {
+  try { return decodeURIComponent(new URL(String(value || '')).pathname.split('/').pop() || ''); }
+  catch { return ''; }
+}
+
+function identityTerms(value) {
+  const terms = normalizeIdentityText(value).split(' ').filter(Boolean).filter(term => !IDENTITY_NOISE.has(term));
+  return terms.length ? terms : normalizeIdentityText(value).split(' ').filter(Boolean);
+}
+
+function matchesIdentity(value, terms) {
+  if (!value || !terms.length) return false;
+  const words = ` ${value} `;
+  if (terms.every(term => words.includes(` ${term} `))) return true;
+  const compactValue = value.replaceAll(' ', '');
+  return compactValue.includes(terms.join(''));
+}
+
+function normalizeIdentityText(value) {
+  return String(value || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function containsWords(value, phrase) {
+  const normalized = normalizeIdentityText(value);
+  return identityTerms(phrase).every(term => ` ${normalized} `.includes(` ${term} `));
 }
 
 function boundQueryPart(value, maxWords, maxChars) {

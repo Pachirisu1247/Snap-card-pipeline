@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  assessCandidateIdentity,
   buildArtSearchQuery,
   candidateContentFlags,
   deduplicateCandidates,
@@ -8,12 +9,14 @@ import {
   normalizeCandidateUrl,
   rankCandidates,
   resolutionScore,
+  semanticVerificationFlags,
 } from '../static/candidate-ranker.js';
 
-test('art-only query expansion preserves identity and anchors discovery to Marvel Snap art', () => {
+test('art-only query expansion preserves identity and anchors discovery to character artwork', () => {
   const query = buildArtSearchQuery('Havok', 'Havok Alex Summers X-Men');
   assert.match(query, /Havok Alex Summers X-Men/);
-  assert.match(query, /Marvel Snap variants artwork comic illustration/);
+  assert.match(query, /Marvel character comic artwork illustration/);
+  assert.doesNotMatch(query, /Marvel Snap|variants/);
   assert.doesNotMatch(query, /-toy|-statue|-figurine|-collectible/);
   assert.ok(query.length <= 390);
   assert.ok(query.split(/\s+/).length <= 48);
@@ -22,9 +25,15 @@ test('art-only query expansion preserves identity and anchors discovery to Marve
 
 test('art-only query expansion remains within Brave query limits for long custom input', () => {
   const query = buildArtSearchQuery('Havok', Array.from({ length: 80 }, (_, index) => `term${index}`).join(' '));
-  assert.match(query, /Marvel Snap variants artwork comic illustration/);
+  assert.match(query, /Marvel character comic artwork illustration/);
   assert.ok(query.length <= 390);
   assert.ok(query.split(/\s+/).length <= 48);
+});
+
+test('default queries add focused identity hints for ambiguous calibration characters', () => {
+  assert.match(buildArtSearchQuery('Havok'), /"Havok" Alex Summers X-Men/);
+  assert.match(buildArtSearchQuery('Headpool'), /"Headpool" Marvel Snap Deadpool/);
+  assert.match(buildArtSearchQuery('Galactus First Steps'), /"Galactus First Steps" Fantastic Four Galactus/);
 });
 
 test('URL normalization strips tracking and rejects unsafe schemes', () => {
@@ -60,6 +69,41 @@ test('deterministic filtering hard-rejects toys, storefronts, cosplay, and tutor
   assert.deepEqual(filtered.slice(0, 5).map(item => item.rejected), [true, true, true, true, true]);
   assert.equal(filtered[5].rejected, false);
   assert.deepEqual(candidateContentFlags(filtered[5]), []);
+});
+
+test('identity verification trusts the image title or filename, never a matching results page alone', () => {
+  assert.deepEqual(assessCandidateIdentity({ title: 'Havok dynamic comic illustration', original_url: 'https://images.test/opaque-123.jpg' }, 'Havok'), { verified: true, evidence: ['title'] });
+  assert.deepEqual(assessCandidateIdentity({ title: '', original_url: 'https://images.test/Havok_09.webp' }, 'Havok'), { verified: true, evidence: ['image_filename'] });
+  assert.deepEqual(assessCandidateIdentity({ title: 'Shadow King card', original_url: 'https://images.test/shadow-king.jpg', source_page_url: 'https://site.test/havok-guide' }, 'Havok'), { verified: false, evidence: [] });
+  assert.deepEqual(assessCandidateIdentity({ title: '', original_url: 'https://images.test/HydraBob.webp', source_page_url: 'https://site.test/cards/havok' }, 'Havok'), { verified: false, evidence: [] });
+  assert.equal(assessCandidateIdentity({ title: 'Galactus comic cover' }, 'Galactus First Steps').verified, true);
+});
+
+test('strict filtering rejects wrong-character page leakage and rendered card assets', () => {
+  const base = { width: 1000, height: 1200, thumbnail_url: 'https://images.test/thumb.jpg' };
+  const filtered = deterministicFilter([
+    { ...base, id: 'wrong', title: '', original_url: 'https://marvelsnapzone.com/assets/media/cards/hydra-bob.webp', source_page_url: 'https://marvelsnapzone.com/cards/havok/' },
+    { ...base, id: 'card', title: 'Havok Hellfire Gala variant', original_url: 'https://snapjson.untapped.gg/art/render/framebreak/common/1024/Havok_04.webp' },
+    { ...base, id: 'art', title: 'Havok dynamic X-Men comic artwork', original_url: 'https://artist.test/gallery/painted-scene.jpg' },
+  ], { characterName: 'Havok' });
+  assert.equal(filtered[0].rejected, true);
+  assert.ok(filtered[0].filter_flags.includes('identity_unverified'));
+  assert.ok(filtered[0].filter_flags.includes('rendered_card'));
+  assert.equal(filtered[1].rejected, true);
+  assert.ok(filtered[1].filter_flags.includes('rendered_card'));
+  assert.equal(filtered[2].rejected, false);
+  assert.equal(filtered[2].identity_verified, true);
+});
+
+test('visual verification rejects only confident wrong-character or rendered-card classifications', () => {
+  assert.deepEqual(semanticVerificationFlags({ semantic_identity: 0.1, semantic_artwork: 0.2, semantic_wrong_character: 0.5, semantic_rendered_card: 0.05 }), ['wrong_character_visual']);
+  assert.deepEqual(semanticVerificationFlags({ semantic_identity: 0.5, semantic_artwork: 0.1, semantic_wrong_character: 0.05, semantic_rendered_card: 0.5 }), ['rendered_card_visual']);
+  assert.deepEqual(semanticVerificationFlags({ semantic_identity: 0.1, semantic_artwork: 0.2, semantic_wrong_character: 0.25, semantic_rendered_card: 0.05 }), []);
+  assert.deepEqual(semanticVerificationFlags({ identity_evidence: ['title', 'image_filename'], semantic_identity: 0.05, semantic_artwork: 0.3, semantic_wrong_character: 0.6, semantic_rendered_card: 0.05 }), []);
+  assert.deepEqual(semanticVerificationFlags({ semantic_identity: 0.4, semantic_artwork: 0.1, semantic_photo: 0.5 }), ['photo_visual']);
+  assert.deepEqual(semanticVerificationFlags({ semantic_identity: 0.4, semantic_artwork: 0.1, semantic_merchandise: 0.5 }), ['merchandise_visual']);
+  assert.deepEqual(semanticVerificationFlags({ semantic_identity: 0.4, semantic_artwork: 0.1, semantic_tutorial: 0.5 }), ['tutorial_visual']);
+  assert.deepEqual(semanticVerificationFlags({ semantic_identity: 0.38, semantic_artwork: 0.3, semantic_wrong_character: 0.08, semantic_rendered_card: 0.06 }), []);
 });
 
 test('perceptual hash deduplication keeps the first provider result', () => {

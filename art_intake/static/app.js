@@ -2,7 +2,7 @@ import { getJson, postJson } from './api.js';
 import { ANALYSIS_VERSION, migrateState, normalizeCrop, defaultCrop } from './state.js';
 import { solveCrop, confidenceBand } from './crop-solver.js';
 import { ImageAnalyzer, analyzeSourceFallback, perceptualHash } from './image-analysis.js';
-import { buildArtSearchQuery, deterministicFilter, deduplicateCandidates, rankCandidates } from './candidate-ranker.js';
+import { buildArtSearchQuery, deterministicFilter, deduplicateCandidates, rankCandidates, semanticVerificationFlags } from './candidate-ranker.js';
 import { PhotopeaClient } from './photopea-client.js';
 import { summarizeCalibration } from './calibration.js';
 import { BatchController } from './batch-controller.js';
@@ -361,12 +361,12 @@ async function loadSavedCandidates() {
   const card = active(), run = ++app.candidateRun;
   const data = await getJson(`/api/candidates/${encodeURIComponent(card.id)}`);
   if (run !== app.candidateRun || active().id !== card.id) return;
-  app.candidates = rankCandidates(deterministicFilter(data.candidates || []).filter(item => !item.rejected));
+  app.candidates = rankCandidates(deterministicFilter(data.candidates || [], { characterName: displayName(card.id) }).filter(item => !item.rejected));
   renderCandidates();
 }
 
 async function prepareCandidates(input, run) {
-  const filtered = deterministicFilter(input);
+  const filtered = deterministicFilter(input, { characterName: displayName(active().id) });
   const usableAll = filtered.filter(candidate => !candidate.rejected);
   const filteredCount = filtered.length - usableAll.length;
   // Spend the expensive hashing/framing/model budget on the strongest
@@ -389,6 +389,7 @@ async function prepareCandidates(input, run) {
   const unavailableCount = prepared.length - available.length;
   const deduped = deduplicateCandidates(available);
   let ranked = rankCandidates(deduped.unique);
+  let semanticFilteredCount = 0;
   app.candidates = ranked; renderCandidates();
 
   if (ranked.length) {
@@ -396,13 +397,26 @@ async function prepareCandidates(input, run) {
     try {
       const semantic = await analyzer.rank(ranked.map(candidate => ({ id: candidate.id, source: candidateSource(candidate) })), displayName(active().id), event => showCandidateProgress(0.62 + (Number(event.value) || 0) * 0.34, event.message || 'Ranking candidates'));
       const byId = new Map(semantic.map(item => [item.id, item]));
-      ranked = rankCandidates(ranked.map(candidate => ({ ...candidate, semantic_relevance: byId.get(candidate.id)?.relevance ?? 0.35, semantic_scores: byId.get(candidate.id)?.scores || {} })));
+      const verified = ranked.map(candidate => {
+        const result = byId.get(candidate.id) || {};
+        const enriched = {
+          ...candidate, semantic_relevance: result.relevance ?? 0.35, semantic_scores: result.scores || {},
+          semantic_identity: result.identity_score, semantic_artwork: result.artwork_score,
+          semantic_wrong_character: result.wrong_character_score, semantic_rendered_card: result.rendered_card_score,
+          semantic_merchandise: result.merchandise_score, semantic_photo: result.photo_score,
+          semantic_tutorial: result.tutorial_score,
+        };
+        const semanticFlags = semanticVerificationFlags(enriched);
+        return { ...enriched, filter_flags: [...new Set([...(enriched.filter_flags || []), ...semanticFlags])], semantic_rejected: semanticFlags.length > 0 };
+      });
+      semanticFilteredCount = verified.filter(candidate => candidate.semantic_rejected).length;
+      ranked = rankCandidates(verified.filter(candidate => !candidate.semantic_rejected));
     } catch (error) {
       toast(`Semantic ranking used deterministic fallback: ${error.message}`, true);
     }
   }
   app.candidates = ranked; renderCandidates(); hideCandidateProgress();
-  $('scoutSummary').textContent = `${input.length} discovered · ${filteredCount} unsuitable result${filteredCount === 1 ? '' : 's'} filtered · ${available.length}/${usable.length} shortlisted thumbnails inspected · ${unavailableCount} unavailable · ${deduped.removed} near-duplicate${deduped.removed === 1 ? '' : 's'} removed · showing ${Math.min(6, ranked.length)} finalists`;
+  $('scoutSummary').textContent = `${input.length} discovered · ${filteredCount} metadata mismatch${filteredCount === 1 ? '' : 'es'} filtered · ${semanticFilteredCount} visual mismatch${semanticFilteredCount === 1 ? '' : 'es'} filtered · ${available.length}/${usable.length} thumbnails inspected · ${unavailableCount} unavailable · ${deduped.removed} near-duplicate${deduped.removed === 1 ? '' : 's'} removed · showing ${Math.min(6, ranked.length)} verified finalist${Math.min(6, ranked.length) === 1 ? '' : 's'}`;
   if (!available.length && usable.length) toast('No shortlisted thumbnails could be inspected. The saved discovery set is intact; retry when image hosts are reachable.', true);
 }
 
@@ -445,7 +459,7 @@ function renderCandidates() {
     const body = document.createElement('div'); body.className = 'candidate-body';
     const title = document.createElement('p'); title.className = 'candidate-title'; title.textContent = candidate.title || 'Untitled candidate';
     const metrics = document.createElement('div'); metrics.className = 'candidate-metrics';
-    metrics.append(metric(`${candidate.width || '?'}×${candidate.height || '?'}`), metric(`${Math.round((candidate.fused_score || 0) * 100)} score`), metric(`${Math.round((candidate.composition_confidence || 0) * 100)}% framing`));
+    metrics.append(metric(`${candidate.width || '?'}×${candidate.height || '?'}`), metric('identity matched'), metric('art-only'), metric(`${Math.round((candidate.composition_confidence || 0) * 100)}% framing`));
     const choose = document.createElement('button'); choose.type = 'button'; choose.textContent = 'Use this artwork'; choose.addEventListener('click', () => selectCandidate(candidate));
     const source = document.createElement('a'); source.href = candidate.source_page_url || candidate.original_url; source.target = '_blank'; source.rel = 'noreferrer'; source.textContent = 'Open source page';
     body.append(title, metrics, choose, source); card.append(imageWrap, body); return card;
