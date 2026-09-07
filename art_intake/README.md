@@ -32,7 +32,9 @@ must name the requested character in its own image title or filename; a matching
 results-page URL is not enough. Known rendered-card assets plus obvious toy,
 storefront, cosplay-photo, and tutorial results are hard-rejected before visual
 verification. The visual verifier can additionally reject confident wrong-character
-and card-frame matches. Enter the key once in the
+and card-frame matches. Versioned local verification snapshots ensure rejected
+results cannot reappear after card navigation or a page reload; stale snapshots
+fail closed and are rebuilt automatically. Enter the key once in the
 setup panel or set `ART_DESK_BRAVE_API_KEY`. The key is saved only in ignored
 `data/settings.local.json`, is never returned by the API, and is never committed.
 

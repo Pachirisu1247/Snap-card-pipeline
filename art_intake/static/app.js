@@ -2,7 +2,8 @@ import { getJson, postJson } from './api.js';
 import { ANALYSIS_VERSION, migrateState, normalizeCrop, defaultCrop } from './state.js';
 import { solveCrop, confidenceBand } from './crop-solver.js';
 import { ImageAnalyzer, analyzeSourceFallback, perceptualHash } from './image-analysis.js';
-import { buildArtSearchQuery, deterministicFilter, deduplicateCandidates, rankCandidates, semanticVerificationFlags } from './candidate-ranker.js';
+import { buildArtSearchQuery, deterministicFilter, deduplicateCandidates, rankCandidates, semanticVerificationFlags, RANKING_VERSION } from './candidate-ranker.js';
+import { createVerificationSnapshot, restoreVerificationSnapshot } from './candidate-verification-cache.js';
 import { PhotopeaClient } from './photopea-client.js';
 import { summarizeCalibration } from './calibration.js';
 import { BatchController } from './batch-controller.js';
@@ -361,8 +362,18 @@ async function loadSavedCandidates() {
   const card = active(), run = ++app.candidateRun;
   const data = await getJson(`/api/candidates/${encodeURIComponent(card.id)}`);
   if (run !== app.candidateRun || active().id !== card.id) return;
-  app.candidates = rankCandidates(deterministicFilter(data.candidates || [], { characterName: displayName(card.id) }).filter(item => !item.rejected));
-  renderCandidates();
+  const raw = data.candidates || [];
+  if (!raw.length) { app.candidates = []; renderCandidates(); return; }
+  const eligible = deterministicFilter(raw, { characterName: displayName(card.id) }).filter(item => !item.rejected);
+  const restored = restoreVerificationSnapshot(raw, eligible, readVerificationSnapshot(card.id), RANKING_VERSION);
+  if (restored) {
+    app.candidates = rankCandidates(restored.candidates); renderCandidates();
+    renderScoutSummary(restored.summary, app.candidates.length);
+    return;
+  }
+  app.candidates = []; renderCandidates();
+  $('scoutSummary').textContent = 'Saved candidates found · verifying identity and artwork before anything is shown…';
+  await prepareCandidates(raw, run);
 }
 
 async function prepareCandidates(input, run) {
@@ -390,7 +401,6 @@ async function prepareCandidates(input, run) {
   const deduped = deduplicateCandidates(available);
   let ranked = rankCandidates(deduped.unique);
   let semanticFilteredCount = 0;
-  app.candidates = ranked; renderCandidates();
 
   if (ranked.length) {
     showCandidateProgress(0.62, 'Measuring character relevance…');
@@ -415,9 +425,29 @@ async function prepareCandidates(input, run) {
       toast(`Semantic ranking used deterministic fallback: ${error.message}`, true);
     }
   }
-  app.candidates = ranked; renderCandidates(); hideCandidateProgress();
-  $('scoutSummary').textContent = `${input.length} discovered · ${filteredCount} metadata mismatch${filteredCount === 1 ? '' : 'es'} filtered · ${semanticFilteredCount} visual mismatch${semanticFilteredCount === 1 ? '' : 'es'} filtered · ${available.length}/${usable.length} thumbnails inspected · ${unavailableCount} unavailable · ${deduped.removed} near-duplicate${deduped.removed === 1 ? '' : 's'} removed · showing ${Math.min(6, ranked.length)} verified finalist${Math.min(6, ranked.length) === 1 ? '' : 's'}`;
+  const summary = {
+    input_count: input.length, filtered_count: filteredCount, semantic_filtered_count: semanticFilteredCount,
+    available_count: available.length, shortlisted_count: usable.length, unavailable_count: unavailableCount,
+    duplicate_count: deduped.removed,
+  };
+  writeVerificationSnapshot(active().id, createVerificationSnapshot(input, ranked, RANKING_VERSION, summary));
+  app.candidates = ranked; renderCandidates(); hideCandidateProgress(); renderScoutSummary(summary, ranked.length);
   if (!available.length && usable.length) toast('No shortlisted thumbnails could be inspected. The saved discovery set is intact; retry when image hosts are reachable.', true);
+}
+
+function renderScoutSummary(summary, finalistCount) {
+  const visible = Math.min(6, finalistCount);
+  $('scoutSummary').textContent = `${summary.input_count || 0} discovered · ${summary.filtered_count || 0} metadata mismatch${summary.filtered_count === 1 ? '' : 'es'} filtered · ${summary.semantic_filtered_count || 0} visual mismatch${summary.semantic_filtered_count === 1 ? '' : 'es'} filtered · ${summary.available_count || 0}/${summary.shortlisted_count || 0} thumbnails inspected · ${summary.unavailable_count || 0} unavailable · ${summary.duplicate_count || 0} near-duplicate${summary.duplicate_count === 1 ? '' : 's'} removed · showing ${visible} verified finalist${visible === 1 ? '' : 's'}`;
+}
+
+function verificationStorageKey(cardId) { return `art-desk.candidate-verification.v1.${cardId}`; }
+function readVerificationSnapshot(cardId) {
+  try { return JSON.parse(localStorage.getItem(verificationStorageKey(cardId)) || 'null'); }
+  catch { return null; }
+}
+function writeVerificationSnapshot(cardId, snapshot) {
+  try { localStorage.setItem(verificationStorageKey(cardId), JSON.stringify(snapshot)); }
+  catch { /* verification still applies for the current session */ }
 }
 
 function unresolvedWithoutCandidates() {

@@ -1,6 +1,6 @@
 import { hashDistance } from './image-analysis.js';
 
-export const RANKING_VERSION = 3;
+export const RANKING_VERSION = 4;
 export const RANKING_WEIGHTS = Object.freeze({ relevance: 0.35, composition: 0.25, resolution: 0.15, diversity: 0.1, cleanliness: 0.1, provider: 0.05 });
 
 const ART_QUERY_POSITIVES = Object.freeze(['Marvel', 'character', 'comic artwork', 'illustration']);
