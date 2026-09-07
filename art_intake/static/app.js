@@ -368,7 +368,7 @@ async function loadSavedCandidates() {
 async function prepareCandidates(input, run) {
   const filtered = deterministicFilter(input);
   const usableAll = filtered.filter(candidate => !candidate.rejected);
-  const nonArtCount = filtered.length - usableAll.length;
+  const filteredCount = filtered.length - usableAll.length;
   // Spend the expensive hashing/framing/model budget on the strongest
   // metadata candidates, not merely the provider's first 24 results.
   const usable = rankCandidates(usableAll).slice(0, 24);
@@ -402,7 +402,7 @@ async function prepareCandidates(input, run) {
     }
   }
   app.candidates = ranked; renderCandidates(); hideCandidateProgress();
-  $('scoutSummary').textContent = `${input.length} discovered · ${nonArtCount} non-art result${nonArtCount === 1 ? '' : 's'} rejected · ${available.length}/${usable.length} shortlisted thumbnails inspected · ${unavailableCount} unavailable · ${deduped.removed} near-duplicate${deduped.removed === 1 ? '' : 's'} removed · showing ${Math.min(6, ranked.length)} finalists`;
+  $('scoutSummary').textContent = `${input.length} discovered · ${filteredCount} unsuitable result${filteredCount === 1 ? '' : 's'} filtered · ${available.length}/${usable.length} shortlisted thumbnails inspected · ${unavailableCount} unavailable · ${deduped.removed} near-duplicate${deduped.removed === 1 ? '' : 's'} removed · showing ${Math.min(6, ranked.length)} finalists`;
   if (!available.length && usable.length) toast('No shortlisted thumbnails could be inspected. The saved discovery set is intact; retry when image hosts are reachable.', true);
 }
 
