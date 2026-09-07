@@ -96,7 +96,9 @@ async function runRanking(message) {
     `high quality comic book illustration of ${cleanName}`,
     'professional full character artwork',
     'unrelated character or random image',
-    'logo, screenshot, trading card, collage, or text poster',
+    'toy, statue, action figure, collectible, or merchandise product photo',
+    'cosplay, actor, live action movie still, or ordinary photograph',
+    'drawing tutorial, coloring page, logo, screenshot, trading card, collage, or text poster',
     'low quality or blurry image',
   ];
   const positive = new Set(labels.slice(0, 3));

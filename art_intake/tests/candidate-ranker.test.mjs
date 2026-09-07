@@ -1,12 +1,31 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildArtSearchQuery,
+  candidateContentFlags,
   deduplicateCandidates,
   deterministicFilter,
   normalizeCandidateUrl,
   rankCandidates,
   resolutionScore,
 } from '../static/candidate-ranker.js';
+
+test('art-only query expansion preserves identity and anchors discovery to Marvel Snap art', () => {
+  const query = buildArtSearchQuery('Havok', 'Havok Alex Summers X-Men');
+  assert.match(query, /Havok Alex Summers X-Men/);
+  assert.match(query, /Marvel Snap variants artwork comic illustration/);
+  assert.doesNotMatch(query, /-toy|-statue|-figurine|-collectible/);
+  assert.ok(query.length <= 390);
+  assert.ok(query.split(/\s+/).length <= 48);
+  assert.equal(buildArtSearchQuery('Havok', query), query);
+});
+
+test('art-only query expansion remains within Brave query limits for long custom input', () => {
+  const query = buildArtSearchQuery('Havok', Array.from({ length: 80 }, (_, index) => `term${index}`).join(' '));
+  assert.match(query, /Marvel Snap variants artwork comic illustration/);
+  assert.ok(query.length <= 390);
+  assert.ok(query.split(/\s+/).length <= 48);
+});
 
 test('URL normalization strips tracking and rejects unsafe schemes', () => {
   assert.equal(normalizeCandidateUrl('javascript:alert(1)'), '');
@@ -26,6 +45,21 @@ test('deterministic filtering rejects duplicate, low-resolution, extreme, and te
   ]);
   assert.equal(filtered[0].rejected, false);
   assert.deepEqual(filtered.slice(1).map(item => item.rejected), [true, true, true, true]);
+});
+
+test('deterministic filtering hard-rejects toys, storefronts, cosplay, and tutorials but keeps comic art', () => {
+  const base = { width: 1800, height: 2400, thumbnail_url: 'https://images.test/thumb.jpg' };
+  const filtered = deterministicFilter([
+    { ...base, id: 'statue', original_url: 'https://images.test/havok-statue.jpg', source_page_url: 'https://collectors.test/havok', title: 'Havok Art Scale BDS Statue by Iron Studios (Limited Ed)' },
+    { ...base, id: 'figure', original_url: 'https://images.test/headpool.jpg', source_page_url: 'https://shop.test/headpool', title: 'Headpool Marvel Legends action figure collectible in stock' },
+    { ...base, id: 'store', original_url: 'https://i.etsystatic.com/havok-print.jpg', source_page_url: 'https://www.etsy.com/listing/123/havok', title: 'Havok wall art' },
+    { ...base, id: 'cosplay', original_url: 'https://images.test/cosplay.jpg', source_page_url: 'https://photos.test/havok', title: 'Havok cosplay costume photoshoot' },
+    { ...base, id: 'tutorial', original_url: 'https://images.test/draw.jpg', source_page_url: 'https://draw.test/havok', title: 'How to draw Havok step-by-step drawing tutorial' },
+    { ...base, id: 'cover', original_url: 'https://images.test/cover.jpg', source_page_url: 'https://comicartfans.com/havok', title: 'Havok X-Men dynamic comic cover illustration by Neal Adams' },
+  ]);
+  assert.deepEqual(filtered.slice(0, 5).map(item => item.rejected), [true, true, true, true, true]);
+  assert.equal(filtered[5].rejected, false);
+  assert.deepEqual(candidateContentFlags(filtered[5]), []);
 });
 
 test('perceptual hash deduplication keeps the first provider result', () => {

@@ -2,7 +2,7 @@ import { getJson, postJson } from './api.js';
 import { ANALYSIS_VERSION, migrateState, normalizeCrop, defaultCrop } from './state.js';
 import { solveCrop, confidenceBand } from './crop-solver.js';
 import { ImageAnalyzer, analyzeSourceFallback, perceptualHash } from './image-analysis.js';
-import { deterministicFilter, deduplicateCandidates, rankCandidates } from './candidate-ranker.js';
+import { buildArtSearchQuery, deterministicFilter, deduplicateCandidates, rankCandidates } from './candidate-ranker.js';
 import { PhotopeaClient } from './photopea-client.js';
 import { summarizeCalibration } from './calibration.js';
 import { BatchController } from './batch-controller.js';
@@ -19,7 +19,7 @@ const app = {
 const batch = new BatchController({
   runTask: async card => {
     const count = Math.max(1, Math.min(200, Number($('searchCount').value) || 80));
-    const query = `${displayName(card.id)} Marvel character comic art`;
+    const query = buildArtSearchQuery(displayName(card.id));
     const data = await postJson('/api/search-candidates', { card_id: card.id, query, count });
     app.calibration = data.calibration || app.calibration;
     app.candidateInventory[card.id] = { count: (data.candidates || []).length, query, updated_at: new Date().toISOString() };
@@ -153,7 +153,7 @@ function render() {
   $('urlInput').value = '';
   $('sourceInput').value = saved?.source_url || '';
   $('noteInput').value = saved?.note || '';
-  $('searchQuery').value = `${displayName(card.id)} Marvel character comic art`;
+  $('searchQuery').value = buildArtSearchQuery(displayName(card.id));
   $('backButton').disabled = app.index === 0;
   $('nextButton').disabled = app.index === app.queue.length - 1;
   renderQueue(); renderAnalysis(); renderCalibration(); syncControls();
@@ -340,8 +340,9 @@ async function saveSearchKey() {
 }
 
 async function searchCandidates() {
-  const card = active(), query = $('searchQuery').value.trim(), count = Number($('searchCount').value);
+  const card = active(), query = buildArtSearchQuery(displayName(active().id), $('searchQuery').value.trim()), count = Number($('searchCount').value);
   if (!query) { toast('Enter an image search query.', true); return; }
+  $('searchQuery').value = query;
   const run = ++app.candidateRun;
   showCandidateProgress(0.02, 'Requesting image candidates…');
   $('searchButton').disabled = true;
@@ -367,6 +368,7 @@ async function loadSavedCandidates() {
 async function prepareCandidates(input, run) {
   const filtered = deterministicFilter(input);
   const usableAll = filtered.filter(candidate => !candidate.rejected);
+  const nonArtCount = filtered.length - usableAll.length;
   // Spend the expensive hashing/framing/model budget on the strongest
   // metadata candidates, not merely the provider's first 24 results.
   const usable = rankCandidates(usableAll).slice(0, 24);
@@ -400,7 +402,7 @@ async function prepareCandidates(input, run) {
     }
   }
   app.candidates = ranked; renderCandidates(); hideCandidateProgress();
-  $('scoutSummary').textContent = `${input.length} discovered · ${available.length}/${usable.length} shortlisted thumbnails inspected · ${unavailableCount} unavailable · ${deduped.removed} near-duplicate${deduped.removed === 1 ? '' : 's'} removed · showing ${Math.min(6, ranked.length)} finalists`;
+  $('scoutSummary').textContent = `${input.length} discovered · ${nonArtCount} non-art result${nonArtCount === 1 ? '' : 's'} rejected · ${available.length}/${usable.length} shortlisted thumbnails inspected · ${unavailableCount} unavailable · ${deduped.removed} near-duplicate${deduped.removed === 1 ? '' : 's'} removed · showing ${Math.min(6, ranked.length)} finalists`;
   if (!available.length && usable.length) toast('No shortlisted thumbnails could be inspected. The saved discovery set is intact; retry when image hosts are reachable.', true);
 }
 
